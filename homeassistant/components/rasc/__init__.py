@@ -59,7 +59,10 @@ from homeassistant.helpers.typing import ConfigType
 
 from .abstraction import RASCAbstraction
 from .const import DOMAIN, LOGGER, RASC_SLO, RASC_WORST_Q, SUPPORTED_PLATFORMS
+<<<<<<< HEAD
 from .rescheduler import RascalRescheduler
+=======
+>>>>>>> 8d8dad1408 (fix jit scheduler)
 from .scheduler import RascalScheduler
 
 supported_scheduling_policies = [FCFS, FCFS_POST, JIT, TIMELINE]
@@ -145,11 +148,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     scheduler = hass.data[DOMAIN_RASCALSCHEDULER] = RascalScheduler(
         hass, config[DOMAIN]
     )
+<<<<<<< HEAD
     if config[DOMAIN][RESCHEDULING_POLICY] != NONE:
         rescheduler = hass.data[DOMAIN_RASCALRESCHEDULER] = RascalRescheduler(
             hass, scheduler, config[DOMAIN]
         )
         scheduler.reschedule_handler = rescheduler.handle_event
+=======
+    hass.data[DOMAIN_RASCALSCHEDULER] = RascalScheduler(hass)
+>>>>>>> 8d8dad1408 (fix jit scheduler)
 
     await component.async_load()
 
