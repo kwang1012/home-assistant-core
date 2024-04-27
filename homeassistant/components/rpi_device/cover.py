@@ -29,6 +29,8 @@ async def async_setup_entry(
     host = config_entry.data[CONF_HOST]
     try:
         device: RaspberryPiDevice = await Discover.discover_single(host)
+        if device.device_type != "door":
+            return
         device = cast(RaspberryPiDoor, device)
         async_add_entities([RpiDoor(device)])
     except ValueError as ex:
@@ -80,10 +82,6 @@ class RpiDoor(RpiEntity, CoverEntity):
     def is_closed(self) -> bool | None:
         """Return if the cover is closed or not."""
         return self.device.is_closed
-
-    async def async_update(self):
-        """Update the device."""
-        await self.device.update()
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         """Turn the LED switch on."""

@@ -5,6 +5,7 @@ from typing import Optional
 
 from .device import RaspberryPiDevice
 from .door import RaspberryPiDoor
+from .thermostat import RaspberryPiThermostat
 
 
 class Discover:
@@ -47,5 +48,8 @@ class Discover:
 
         if "door" in type_.lower():
             return RaspberryPiDoor
+
+        if "thermostat" in type_.lower():
+            return RaspberryPiThermostat
 
         raise ValueError("Unknown device type: %s" % type_)

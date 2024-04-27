@@ -6,4 +6,4 @@ from homeassistant.const import Platform
 
 DOMAIN = "rpi_device"
 
-PLATFORMS: Final = [Platform.COVER]
+PLATFORMS: Final = [Platform.COVER, Platform.CLIMATE, Platform.LIGHT]

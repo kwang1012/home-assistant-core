@@ -39,6 +39,11 @@ class RaspberryPiDevice:
         return self._sys_info
 
     @property
+    def device_type(self) -> str:
+        """Return system information."""
+        return self._sys_info["type"]
+
+    @property
     def model(self) -> str:
         """Return device model."""
         sys_info = self.sys_info
@@ -104,9 +109,6 @@ class RaspberryPiDevice:
         req = {}
         req.update(self._create_request("system", "get_sysinfo"))
 
-        # If this is the initial update, check only for the sysinfo
-        # This is necessary as some devices crash on unexpected modules
-        # See #105, #120, #161
         self._last_update = await self.query(req)
         self._sys_info = self._last_update["system"]["get_sysinfo"]
 

@@ -24,3 +24,7 @@ class RpiEntity(Entity):
             sw_version=device.hw_info["sw_ver"],
             hw_version=device.hw_info["hw_ver"],
         )
+
+    async def async_update(self):
+        """Update the device."""
+        await self.device.update()
