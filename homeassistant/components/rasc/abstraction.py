@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine
-import datetime
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
 import math
 import time
@@ -560,7 +559,7 @@ class RASCState:
 
         await self._track()
 
-    async def _check_failure(self, _: datetime.datetime) -> None:
+    async def _check_failure(self, _: datetime) -> None:
         if self._c_detector is not None:
             self._c_detector.check_failure = True
 
@@ -756,7 +755,7 @@ class RASCState:
         LOGGER.debug(
             "# polls used: %d, current_time: %s",
             self._polls_used,
-            time.strftime("%l:%M%p %Z, %b %d %Y"),
+            datetime.now().strftime("%F %T.%f")[:-3],
         )
 
 
