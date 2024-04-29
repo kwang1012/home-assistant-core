@@ -24,6 +24,7 @@ from homeassistant.const import (
     SERVICE_TURN_ON,
     STATE_OFF,
     STATE_ON,
+    Platform,
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -240,6 +241,11 @@ class ClimateEntity(Entity):
     _attr_target_temperature_step: float | None = None
     _attr_target_temperature: float | None = None
     _attr_temperature_unit: str
+
+    @property
+    def platform_value(self) -> str:
+        """Return entity platform value."""
+        return Platform.CLIMATE.value
 
     @final
     @property

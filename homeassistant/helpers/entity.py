@@ -326,6 +326,11 @@ class Entity(ABC):
     _attr_unit_of_measurement: str | None
 
     @property
+    def platform_value(self) -> str | None:
+        """Return entity platform value."""
+        return None
+
+    @property
     def should_poll(self) -> bool:
         """Return True if entity has to be polled for state.
 

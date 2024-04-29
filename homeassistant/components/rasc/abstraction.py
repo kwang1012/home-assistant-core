@@ -36,6 +36,7 @@ from homeassistant.helpers.entity_platform import EntityPlatform
 from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.template import device_entities
+from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 import homeassistant.util.dt as dt_util
 
@@ -48,11 +49,14 @@ _R = TypeVar("_R")
 class RASCAbstraction:
     """RASC Component."""
 
-    def __init__(self, logger, domain, hass: HomeAssistant) -> None:
+    def __init__(
+        self, logger, domain, hass: HomeAssistant, config: ConfigType | None = None
+    ) -> None:
         """Initialize an rasc entity."""
         self.logger = logger
         self.domain = domain
         self.hass = hass
+        self.config = config or {}
         self._store = RASCStore(self.hass)
         self._states: dict[str, RASCState] = {}
 
@@ -138,6 +142,11 @@ class RASCAbstraction:
         complete_state = (
             entity.async_get_action_target_state({CONF_EVENT: RASC_COMPLETE, **params})
         ) or {}
+
+        if entity.platform_value is not None:
+            config = self.config.get(entity.platform_value)
+        else:
+            config = None
         return RASCState(
             self.hass,
             context,
@@ -146,6 +155,7 @@ class RASCAbstraction:
             start_state,
             complete_state,
             self._store,
+            config=config,
         )
 
     async def _prepare_ack(
@@ -318,7 +328,8 @@ class StateDetector:
         self,
         history: list[float] | None,
         complete_state: dict[str, Any] | None = None,
-        worst_Q: float = 2.0,
+        worst_Q: float | None = None,
+        SLO: float | None = None,
         failure_callback: Any = None,
     ) -> None:
         """Init State Detector."""
@@ -328,7 +339,8 @@ class StateDetector:
         self._next_q: float = 1
         self._check_failure = False
 
-        self._worst_Q = worst_Q
+        self._worst_Q = worst_Q or 2.0
+        self._slo = SLO or 0.95
         # no history is found, polling statically
         if history is None or len(history) == 0:
             self._static = True
@@ -346,7 +358,8 @@ class StateDetector:
         # TODO: put this in bg # pylint: disable=fixme
         dist: rv_continuous = get_best_distribution(history)
         self._attr_upper_bound = dist.ppf(0.99)
-        self._polls = get_polls(dist, worst_case_delta=worst_Q)
+        self._polls = get_polls(dist, worst_case_delta=self._worst_Q, SLO=self._slo)
+        LOGGER.debug("Max polls: %d", len(self._polls))
         self._last_updated: Optional[float] = None
         self._failure_callback = failure_callback
 
@@ -465,9 +478,12 @@ class RASCState:
         start_state: dict[str, Any],
         complete_state: dict[str, Any],
         store: RASCStore,
+        *,
+        config: ConfigType | None = None,
     ) -> None:
         """Init rasc state."""
         self.hass = hass
+        self._config = config or {}
         self._start_state = start_state
         self._complete_state = complete_state
         self._transition = service_call.data.get("transition", 0)
@@ -488,6 +504,8 @@ class RASCState:
         self._platform: EntityPlatform | DataUpdateCoordinator | None = None
         # failure detection
         self._current_state = self._request_state = entity.__dict__
+        # experiments
+        self._polls_used = 0
 
     @property
     def time_elapsed(self) -> float:
@@ -534,6 +552,7 @@ class RASCState:
         # let platform state polling the state
         next_interval = self._get_polling_interval()
         await self._platform.track_entity_state(self._entity, next_interval)
+        self._polls_used += 1
         await self.update()
 
         if self.completed or self.failed:
@@ -690,6 +709,8 @@ class RASCState:
         self._c_detector = StateDetector(
             history.ct_history,
             self._complete_state,
+            worst_Q=self._config.get("worst_q"),
+            SLO=self._config.get("slo"),
             failure_callback=self.on_failure_detected,
         )
         # fire failure if exceed upper_bound
@@ -732,6 +753,11 @@ class RASCState:
         self._next_response = None
         async with self._context.cv:
             self._context.cv.notify_all()
+        LOGGER.debug(
+            "# polls used: %d, current_time: %s",
+            self._polls_used,
+            time.strftime("%l:%M%p %Z, %b %d %Y"),
+        )
 
 
 class RASCStore:

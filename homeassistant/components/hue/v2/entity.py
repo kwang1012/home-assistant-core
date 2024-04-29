@@ -8,6 +8,7 @@ from aiohue.v2.controllers.events import EventType
 from aiohue.v2.models.resource import ResourceTypes
 from aiohue.v2.models.zigbee_connectivity import ConnectivityServiceStatus
 
+from homeassistant.components.rasc.decorator import rasc_push_event
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import (
     DeviceInfo,
@@ -15,7 +16,6 @@ from homeassistant.helpers.device_registry import (
 )
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
-from homeassistant.helpers.rasc import rasc_push_event
 
 from ..bridge import HueBridge
 from ..const import CONF_IGNORE_AVAILABILITY, DOMAIN

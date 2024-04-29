@@ -58,7 +58,7 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .abstraction import RASCAbstraction
-from .const import DOMAIN, LOGGER
+from .const import DOMAIN, LOGGER, RASC_SLO, RASC_WORST_Q, SUPPORTED_PLATFORMS
 from .rescheduler import RascalRescheduler
 from .scheduler import RascalScheduler
 
@@ -120,6 +120,15 @@ CONFIG_SCHEMA = vol.Schema(
                 ),
                 vol.Optional("mthresh", default=1.0): cv.positive_float,  # seconds
                 vol.Optional("mithresh", default=2.0): cv.positive_float,  # seconds
+            },
+            {
+                vol.Optional(platform.value): vol.Schema(
+                    {
+                        vol.Optional(RASC_WORST_Q): cv.positive_float,
+                        vol.Optional(RASC_SLO): cv.positive_float,
+                    }
+                )
+                for platform in SUPPORTED_PLATFORMS
             }
         )
     },
@@ -131,7 +140,7 @@ LOGGER.level = logging.DEBUG
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the RASC component."""
-    component = hass.data[DOMAIN] = RASCAbstraction(LOGGER, DOMAIN, hass)
+    component = hass.data[DOMAIN] = RASCAbstraction(LOGGER, DOMAIN, hass, config[DOMAIN])
     LOGGER.debug("RASC config: %s", config[DOMAIN])
     scheduler = hass.data[DOMAIN_RASCALSCHEDULER] = RascalScheduler(
         hass, config[DOMAIN]

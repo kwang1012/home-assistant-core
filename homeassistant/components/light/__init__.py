@@ -22,6 +22,7 @@ from homeassistant.const import (
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     STATE_ON,
+    Platform,
 )
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
@@ -809,6 +810,11 @@ class LightEntity(ToggleEntity):
     _attr_supported_color_modes: set[ColorMode] | set[str] | None = None
     _attr_supported_features: LightEntityFeature = LightEntityFeature(0)
     _attr_xy_color: tuple[float, float] | None = None
+
+    @property
+    def platform_value(self) -> str:
+        """Return entity platform value."""
+        return Platform.LIGHT.value
 
     @property
     def brightness(self) -> int | None:
