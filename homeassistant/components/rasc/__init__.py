@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 
+import numpy as np
 import voluptuous as vol
 
 from homeassistant.const import (
@@ -22,6 +23,7 @@ from homeassistant.const import (
     DOMAIN_RASCALSCHEDULER,
     EARLIEST,
     EARLY_START,
+    EVENT_HOMEASSISTANT_STARTED,
     FCFS,
     FCFS_POST,
     GLOBAL_FIRST,
@@ -50,6 +52,8 @@ from homeassistant.const import (
     REACTIVE,
     RESCHEDULE_ALL,
     RESCHEDULE_SOME,
+    RESCHEDULING_ACCURACY,
+    RESCHEDULING_ESTIMATION,
     RV,
     SHORTEST,
     SJFW,
@@ -61,7 +65,14 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .abstraction import RASCAbstraction
-from .const import CONF_RESULTS_DIR, DOMAIN, LOGGER, RASC_SLO, RASC_WORST_Q, SUPPORTED_PLATFORMS
+from .const import (
+    CONF_RESULTS_DIR,
+    DOMAIN,
+    LOGGER,
+    RASC_SLO,
+    RASC_WORST_Q,
+    SUPPORTED_PLATFORMS,
+)
 from .rescheduler import RascalRescheduler
 from .scheduler import RascalScheduler
 
@@ -127,6 +138,12 @@ CONFIG_SCHEMA = vol.Schema(
                 ),
                 vol.Optional("mthresh", default=1.0): cv.positive_float,  # seconds
                 vol.Optional("mithresh", default=2.0): cv.positive_float,  # seconds
+                # vol.Optional(RESCHEDULING_ESTIMATION, default=True): cv.boolean,
+                # vol.Optional(RESCHEDULING_ACCURACY, default=RESCHEDULE_ALL): vol.In(
+                #     supported_rescheduling_accuracies
+                # ),
+                # vol.Optional("mthresh", default=1.0): cv.positive_float,  # seconds
+                # vol.Optional("mithresh", default=2.0): cv.positive_float,  # seconds
                 **{
                     vol.Optional(platform.value): vol.Schema(
                         {
@@ -136,19 +153,52 @@ CONFIG_SCHEMA = vol.Schema(
                     )
                     for platform in SUPPORTED_PLATFORMS
                 },
-                # vol.Optional(RESCHEDULING_ESTIMATION, default=True): cv.boolean,
-                # vol.Optional(RESCHEDULING_ACCURACY, default=RESCHEDULE_ALL): vol.In(
-                #     supported_rescheduling_accuracies
-                # ),
-                # vol.Optional("mthresh", default=1.0): cv.positive_float,  # seconds
-                # vol.Optional("mithresh", default=2.0): cv.positive_float,  # seconds
-            },
+                vol.Optional("use_uniform", default=False): cv.boolean,
+                vol.Optional("fixed_history", default=False): cv.boolean,
+            }
         )
     },
     extra=vol.ALLOW_EXTRA,
 )
 
 LOGGER.level = logging.DEBUG
+
+
+def run_experiments(hass: HomeAssistant, rasc: RASCAbstraction):
+    """Run experiments."""
+
+    async def wrapper(_):
+        LOGGER.info("Run experiments")
+        for i, level in enumerate(range(0, 105, 5)):
+            LOGGER.info("RUN: %d, %d", i + 1, level)
+            avg_complete_time = np.mean(
+                rasc.get_history("climate.rpi_device_thermostat,set_temperature,68,69")
+            )
+            LOGGER.debug(avg_complete_time)
+            interruption_time = avg_complete_time * level * 0.01
+            # a_coro, s_coro, c_coro = hass.services.rasc_call("cover", "open_cover", {"entity_id": "cover.rpi_device_door"})
+            a_coro, s_coro, c_coro = hass.services.rasc_call(
+                "climate",
+                "set_temperature",
+                {"temperature": 69, "entity_id": "climate.rpi_device_thermostat"},
+                {"interruption_time": interruption_time, "interruption_moment": 0.8},
+            )
+            await a_coro
+            await s_coro
+            await c_coro
+            LOGGER.debug("complete!68->69")
+            # a_coro, s_coro, c_coro = hass.services.rasc_call("cover", "close_cover", {"entity_id": "cover.rpi_device_door"})
+            a_coro, s_coro, c_coro = hass.services.rasc_call(
+                "climate",
+                "set_temperature",
+                {"temperature": 68, "entity_id": "climate.rpi_device_thermostat"},
+            )
+            await a_coro
+            await s_coro
+            await c_coro
+            LOGGER.debug("complete!69->68")
+
+    return wrapper
 
 
 def _create_result_dir() -> str:
@@ -176,7 +226,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     result_dir = _create_result_dir()
     _save_rasc_configs(config[DOMAIN], result_dir)
 
-    component = hass.data[DOMAIN] = RASCAbstraction(LOGGER, DOMAIN, hass, config[DOMAIN])
+    component = hass.data[DOMAIN] = RASCAbstraction(
+        LOGGER, DOMAIN, hass, config[DOMAIN]
+    )
     LOGGER.debug("RASC config: %s", config[DOMAIN])
     scheduler = hass.data[DOMAIN_RASCALSCHEDULER] = RascalScheduler(
         hass, config[DOMAIN], result_dir
@@ -188,5 +240,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         scheduler.reschedule_handler = rescheduler.handle_event
 
     await component.async_load()
+
+    hass.bus.async_listen_once(
+        EVENT_HOMEASSISTANT_STARTED, run_experiments(hass, component)
+    )
 
     return True

@@ -13,6 +13,7 @@ import numpy as np
 from scipy.stats import rv_continuous
 
 from homeassistant.components import notify
+from homeassistant.components.climate import ClimateEntity
 from homeassistant.const import (
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
@@ -28,7 +29,11 @@ from homeassistant.core import (
     ServiceResponse,
     callback,
 )
-from homeassistant.helpers.dynamic_polling import get_best_distribution, get_polls
+from homeassistant.helpers.dynamic_polling import (
+    get_best_distribution,
+    get_polls,
+    get_uniform_polls,
+)
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_component import EntityComponent
 from homeassistant.helpers.entity_platform import EntityPlatform
@@ -142,10 +147,12 @@ class RASCAbstraction:
             entity.async_get_action_target_state({CONF_EVENT: RASC_COMPLETE, **params})
         ) or {}
 
+        config = {
+            "use_uniform": self.config.get("use_uniform"),
+            "fixed_history": self.config.get("fixed_history"),
+        }
         if entity.platform_value is not None:
-            config = self.config.get(entity.platform_value)
-        else:
-            config = None
+            config.update(self.config.get(entity.platform_value) or {})
         return RASCState(
             self.hass,
             context,
@@ -274,6 +281,10 @@ class RASCAbstraction:
                         notification,
                     )
 
+    def get_history(self, key: str) -> list[float]:
+        """Return history associated with the key."""
+        return self._store.histories.get(key, RASCHistory()).ct_history
+
     async def async_load(self) -> None:
         """Load persistent store."""
         await self._store.async_load()
@@ -329,6 +340,7 @@ class StateDetector:
         complete_state: dict[str, Any] | None = None,
         worst_Q: float | None = None,
         SLO: float | None = None,
+        uniform: bool | None = None,
         failure_callback: Any = None,
     ) -> None:
         """Init State Detector."""
@@ -340,6 +352,7 @@ class StateDetector:
 
         self._worst_Q = worst_Q or 2.0
         self._slo = SLO or 0.95
+        self._is_uniform = bool(uniform)
         # no history is found, polling statically
         if history is None or len(history) == 0:
             self._static = True
@@ -356,11 +369,33 @@ class StateDetector:
             return
         # TODO: put this in bg # pylint: disable=fixme
         dist: rv_continuous = get_best_distribution(history)
+        self._dist = dist
         self._attr_upper_bound = dist.ppf(0.99)
-        self._polls = get_polls(dist, worst_case_delta=self._worst_Q, SLO=self._slo)
+        if self._is_uniform:
+            self._polls = get_uniform_polls(
+                self._attr_upper_bound, worst_case_delta=self._worst_Q
+            )
+        else:
+            self._polls = get_polls(dist, worst_case_delta=self._worst_Q, SLO=self._slo)
+        # print(self._polls)
         LOGGER.debug("Max polls: %d", len(self._polls))
         self._last_updated: Optional[float] = None
         self._failure_callback = failure_callback
+
+    @property
+    def dist(self) -> Any:
+        """Return distribution."""
+        return self._dist
+
+    @property
+    def cur_poll(self) -> int:
+        """Return current poll."""
+        return self._cur_poll
+
+    @property
+    def polls(self) -> list[float]:
+        """Return polls."""
+        return self._polls
 
     @property
     def upper_bound(self) -> float | None:
@@ -432,7 +467,7 @@ class StateDetector:
 
     def next_interval(self) -> timedelta:
         """Get next interval."""
-        if self._static:
+        if self._static or self._is_uniform:
             return timedelta(seconds=self._worst_Q)
         if self._cur_poll < len(self._polls):
             cur = self._cur_poll
@@ -495,6 +530,25 @@ class RASCState:
         self._store = store
         self._next_response = RASC_ACK
         # tracking
+        if self._service_call.service == "set_temperature":
+            _entity: ClimateEntity = cast(ClimateEntity, entity)
+            key = ",".join(
+                (
+                    _entity.entity_id,
+                    self._service_call.service,
+                    str(math.floor(_entity.current_temperature or _entity.min_temp)),
+                    str(math.floor(self._service_call.data["temperature"])),
+                )
+            )
+        else:
+            key = ",".join(
+                (
+                    self._entity.entity_id,
+                    self._service_call.service,
+                    str(self._transition),
+                )
+            )
+        self._key = key
         self._tracking_task: asyncio.Task[Any] | None = None
         self._s_detector: StateDetector | None = None
         self._c_detector: StateDetector | None = None
@@ -574,6 +628,7 @@ class RASCState:
 
         for attr, match in target_state.items():
             entity_attr = getattr(self._entity, attr)
+            # print(attr, entity_attr)
             if entity_attr is None:
                 LOGGER.warning(
                     "Entity %s does not have attribute %s", self._entity.entity_id, attr
@@ -603,17 +658,28 @@ class RASCState:
             await self._c_detector.add_progress(progress)
 
     def _update_store(self, tts: bool = False, ttc: bool = False):
-        key = ",".join(
-            (self._entity.entity_id, self._service_call.service, str(self._transition))
-        )
+        key = self._key
         histories = self._store.histories
         if key not in histories:
             histories[key] = RASCHistory()
 
         if tts:
             histories[key].append_s(self.time_elapsed)
-        if ttc:
-            histories[key].append_c(self.time_elapsed)
+        if ttc and self._c_detector:
+            cur_poll = self._c_detector.cur_poll
+            polls = self._c_detector.polls
+            dist = self._c_detector.dist
+            if cur_poll < len(polls):
+                if cur_poll - 2 < 0:
+                    Q = dist.ppf((dist.cdf(polls[cur_poll - 1]) + dist.cdf(0)) / 2)
+                else:
+                    Q = dist.ppf(
+                        (dist.cdf(polls[cur_poll - 1]) + dist.cdf(polls[cur_poll - 2]))
+                        / 2
+                    )
+                histories[key].append_c(Q)
+            else:
+                histories[key].append_c(self.time_elapsed)
 
         self.hass.loop.create_task(self._store.async_save())
 
@@ -645,7 +711,8 @@ class RASCState:
             # fire start response if haven't
             if not self.started:
                 await self.set_started()
-                self._update_store(tts=True)
+                if not self._config.get("fixed_history"):
+                    self._update_store(tts=True)
                 fire(
                     self.hass,
                     RASC_START,
@@ -656,7 +723,8 @@ class RASCState:
                 )
 
             await self.set_completed()
-            self._update_store(ttc=True)
+            if not self._config.get("fixed_history"):
+                self._update_store(ttc=True)
             fire(
                 self.hass,
                 RASC_COMPLETE,
@@ -668,18 +736,21 @@ class RASCState:
 
             return
 
-        start_state_matched = self._match_target_state(self._start_state)
-        if start_state_matched and not self.started:
-            fire(
-                self.hass,
-                RASC_START,
-                entity_id,
-                action,
-                LOGGER,
-                self._service_call.data,
-            )
-            await self.set_started()
-            self._update_store(tts=True)
+        # only check for start if the action hasn't start
+        if not self.started:
+            start_state_matched = self._match_target_state(self._start_state)
+            if start_state_matched and not self.started:
+                fire(
+                    self.hass,
+                    RASC_START,
+                    entity_id,
+                    action,
+                    LOGGER,
+                    self._service_call.data,
+                )
+                await self.set_started()
+                if not self._config.get("fixed_history"):
+                    self._update_store(tts=True)
 
         # update current state
         await self._update_current_state()
@@ -700,9 +771,7 @@ class RASCState:
         else:
             self._platform = platform
         # retrieve history by key
-        key = ",".join(
-            (self._entity.entity_id, self._service_call.service, str(self._transition))
-        )
+        key = self._key
         history = self._store.histories.get(key, RASCHistory())
         self._s_detector = StateDetector(history.st_history)
         self._c_detector = StateDetector(
@@ -710,6 +779,7 @@ class RASCState:
             self._complete_state,
             worst_Q=self._config.get("worst_q"),
             SLO=self._config.get("slo"),
+            uniform=self._config.get("use_uniform"),
             failure_callback=self.on_failure_detected,
         )
         # fire failure if exceed upper_bound

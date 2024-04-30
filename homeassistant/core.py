@@ -1915,6 +1915,41 @@ class ServiceRegistry:
             self._hass.loop,
         ).result()
 
+    def rasc_call(
+        self,
+        domain: str,
+        service: str,
+        service_data: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> tuple[
+        asyncio.Task[ServiceResponse],
+        asyncio.Task[ServiceResponse],
+        asyncio.Task[ServiceResponse],
+    ]:
+        """Call a service with rasc abstraction."""
+        context = Context()
+        service_data = service_data or {}
+
+        try:
+            handler = self._services[domain][service]
+        except KeyError:
+            domain = domain.lower()
+            service = service.lower()
+            try:
+                handler = self._services[domain][service]
+            except KeyError:
+                raise ServiceNotFound(domain, service) from None
+
+        processed_data = service_data
+        if config is not None:
+            processed_data.update(config)
+
+        service_call = ServiceCall(domain, service, processed_data, context)
+
+        rasc: RASCAbstraction = self._hass.data[DOMAIN_RASC]
+        coro, s_coro, c_coro = rasc.execute_service(handler, service_call)
+        return coro, s_coro, c_coro
+
     async def async_call(
         self,
         domain: str,
