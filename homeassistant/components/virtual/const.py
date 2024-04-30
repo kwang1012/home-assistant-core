@@ -35,5 +35,5 @@ DEFAULT_PUSH = False
 DEFAULT_SIMULATE_NETWORK = False
 
 IMPORTED_GROUP_NAME = "imported"
-IMPORTED_YAML_FILE = "/workspaces/home-assistant-core/config/virtual.yaml"
-META_JSON_FILE = "/workspaces/home-assistant-core/config/.storage/virtual.meta.json"
+IMPORTED_YAML_FILE = "/home/pi/home-assistant-core/config/virtual.yaml"
+META_JSON_FILE = "/home/pi/home-assistant-core/config/.storage/virtual.meta.json"

@@ -80,7 +80,8 @@ class RpiThermostat(RpiEntity, ClimateEntity):
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
         temperature = kwargs[ATTR_TEMPERATURE]
-        await self.device.set_temperature(temperature)
+        del kwargs[ATTR_TEMPERATURE]
+        await self.device.set_temperature(temperature, **kwargs)
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new target hvac mode."""

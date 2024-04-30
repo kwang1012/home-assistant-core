@@ -331,6 +331,8 @@ def get_uniform_polls(
     """Get uniform polls."""
     if N is not None:
         return [(i + 1) * upper_bound / N for i in range(N)]
+    if upper_bound < worst_case_delta:
+        return [upper_bound]
     polls = [
         (i + 1) * worst_case_delta
         for i in range(math.floor(upper_bound / worst_case_delta))
