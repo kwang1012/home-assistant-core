@@ -15,6 +15,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .api.device import RaspberryPiDevice
 from .api.discover import Discover
 from .api.door import RaspberryPiDoor
+from .api.shade import RaspberryPiShade
 from .entity import RpiEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,10 +30,17 @@ async def async_setup_entry(
     host = config_entry.data[CONF_HOST]
     try:
         device: RaspberryPiDevice = await Discover.discover_single(host)
-        if device.device_type != "door":
+        entity: CoverEntity
+        if device.device_type == "door":
+            device = cast(RaspberryPiDoor, device)
+            entity = cast(CoverEntity, RpiDoor(device))
+        elif device.device_type == "shade":
+            device = cast(RaspberryPiShade, device)
+            entity = cast(CoverEntity, RpiShade(device))
+        else:
             return
-        device = cast(RaspberryPiDoor, device)
-        async_add_entities([RpiDoor(device)])
+
+        async_add_entities([entity])
     except ValueError as ex:
         raise ConfigEntryNotReady from ex
 
@@ -46,6 +54,50 @@ async def async_setup_entry(
         raise ConfigEntryNotReady(
             f"Unexpected device found at {host}; expected {config_entry.unique_id}, found {found_mac}"
         )
+
+
+class RpiShade(RpiEntity, CoverEntity):
+    """Representation of door for Rpi."""
+
+    device: RaspberryPiShade
+
+    def __init__(self, device: RaspberryPiShade) -> None:
+        """Initialize the Rpi door."""
+        super().__init__(device)
+
+        self._attr_device_class = CoverDeviceClass.SHADE
+        self._attr_unique_id = f"{self.device.mac}_shade"
+
+    @property
+    def current_cover_position(self) -> int | None:
+        """Return current position of cover.
+
+        None is unknown, 0 is closed, 100 is fully open.
+        """
+        return self.device.shade_position
+
+    @property
+    def is_opening(self) -> bool | None:
+        """Return if the cover is opening or not."""
+        return self.device.is_opening
+
+    @property
+    def is_closing(self) -> bool | None:
+        """Return if the cover is closing or not."""
+        return self.device.is_closing
+
+    @property
+    def is_closed(self) -> bool | None:
+        """Return if the cover is closed or not."""
+        return self.device.is_closed
+
+    async def async_open_cover(self, **kwargs: Any) -> None:
+        """Turn the LED switch on."""
+        await self.device.open_shade()
+
+    async def async_close_cover(self, **kwargs: Any) -> None:
+        """Turn the LED switch off."""
+        await self.device.close_shade()
 
 
 class RpiDoor(RpiEntity, CoverEntity):
