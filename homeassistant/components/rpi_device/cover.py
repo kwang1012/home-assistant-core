@@ -6,16 +6,13 @@ from typing import Any, cast
 
 from homeassistant.components.cover import CoverDeviceClass, CoverEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api.device import RaspberryPiDevice
-from .api.discover import Discover
 from .api.door import RaspberryPiDoor
 from .api.shade import RaspberryPiShade
+from .const import DOMAIN
 from .entity import RpiEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,33 +24,11 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up switches."""
-    host = config_entry.data[CONF_HOST]
-    try:
-        device: RaspberryPiDevice = await Discover.discover_single(host)
-        entity: CoverEntity
-        if device.device_type == "door":
-            device = cast(RaspberryPiDoor, device)
-            entity = cast(CoverEntity, RpiDoor(device))
-        elif device.device_type == "shade":
-            device = cast(RaspberryPiShade, device)
-            entity = cast(CoverEntity, RpiShade(device))
-        else:
-            return
-
-        async_add_entities([entity])
-    except ValueError as ex:
-        raise ConfigEntryNotReady from ex
-
-    found_mac = dr.format_mac(device.mac)
-    if found_mac != config_entry.unique_id:
-        # If the mac address of the device does not match the unique_id
-        # of the config entry, it likely means the DHCP lease has expired
-        # and the device has been assigned a new IP address. We need to
-        # wait for the next discovery to find the device at its new address
-        # and update the config entry so we do not mix up devices.
-        raise ConfigEntryNotReady(
-            f"Unexpected device found at {host}; expected {config_entry.unique_id}, found {found_mac}"
-        )
+    device: RaspberryPiDevice = hass.data[DOMAIN][config_entry.entry_id]
+    if device.is_door:
+        async_add_entities([RpiDoor(cast(RaspberryPiDoor, device))])
+    elif device.is_shade:
+        async_add_entities([RpiShade(cast(RaspberryPiShade, device))])
 
 
 class RpiShade(RpiEntity, CoverEntity):

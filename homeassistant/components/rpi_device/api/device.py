@@ -101,6 +101,21 @@ class RaspberryPiDevice:
 
         return mac
 
+    @property
+    def is_thermostat(self) -> bool:
+        """Return true if device is thermostat."""
+        return self.device_type == "thermostat"
+
+    @property
+    def is_door(self) -> bool:
+        """Return true if device is door."""
+        return self.device_type == "door"
+
+    @property
+    def is_shade(self) -> bool:
+        """Return true if device is shade."""
+        return self.device_type == "shade"
+
     async def update(self):
         """Query the device to update the data.
 

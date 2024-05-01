@@ -10,15 +10,13 @@ from homeassistant.components.climate import (
     HVACMode,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_TEMPERATURE, CONF_HOST, UnitOfTemperature
+from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api.device import RaspberryPiDevice
-from .api.discover import Discover
 from .api.thermostat import RaspberryPiThermostat
+from .const import DOMAIN
 from .entity import RpiEntity
 
 
@@ -27,27 +25,10 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up switches."""
-    host = config_entry.data[CONF_HOST]
-    try:
-        device: RaspberryPiDevice = await Discover.discover_single(host)
-        if device.device_type != "thermostat":
-            return
-        device = cast(RaspberryPiThermostat, device)
-        async_add_entities([RpiThermostat(device)])
-    except ValueError as ex:
-        raise ConfigEntryNotReady from ex
-
-    found_mac = dr.format_mac(device.mac)
-    if found_mac != config_entry.unique_id:
-        # If the mac address of the device does not match the unique_id
-        # of the config entry, it likely means the DHCP lease has expired
-        # and the device has been assigned a new IP address. We need to
-        # wait for the next discovery to find the device at its new address
-        # and update the config entry so we do not mix up devices.
-        raise ConfigEntryNotReady(
-            f"Unexpected device found at {host}; expected {config_entry.unique_id}, found {found_mac}"
-        )
+    """Set up thermostat."""
+    device: RaspberryPiDevice = hass.data[DOMAIN][config_entry.entry_id]
+    if device.is_thermostat:
+        async_add_entities([RpiThermostat(cast(RaspberryPiThermostat, device))])
 
 
 class RpiThermostat(RpiEntity, ClimateEntity):
