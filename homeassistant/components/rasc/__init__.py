@@ -9,6 +9,7 @@ import shutil
 import numpy as np
 import voluptuous as vol
 
+from homeassistant.components.climate import SERVICE_SET_TEMPERATURE
 from homeassistant.const import (
     ANTICIPATORY,
     CONF_OPTIMAL_SCHEDULE_METRIC,
@@ -70,7 +71,17 @@ from .const import (
     CONF_RESULTS_DIR,
     DOMAIN,
     LOGGER,
+    RASC_ACTION,
+    RASC_ENTITY_ID,
+    RASC_EXPERIMENT_SETTING,
+    RASC_FIXED_HISTORY,
+    RASC_INTERRUPTION_MOMENT,
+    RASC_INTERRUPTION_TIME,
     RASC_SLO,
+    RASC_THERMOSTAT,
+    RASC_THERMOSTAT_START,
+    RASC_THERMOSTAT_TARGET,
+    RASC_USE_UNIFORM,
     RASC_WORST_Q,
     SUPPORTED_PLATFORMS,
 )
@@ -157,8 +168,21 @@ CONFIG_SCHEMA = vol.Schema(
                     )
                     for platform in SUPPORTED_PLATFORMS
                 },
-                vol.Optional("use_uniform", default=False): cv.boolean,
-                vol.Optional("fixed_history", default=False): cv.boolean,
+                vol.Optional(RASC_USE_UNIFORM): cv.boolean,
+                vol.Optional(RASC_FIXED_HISTORY): cv.boolean,
+                vol.Optional(RASC_EXPERIMENT_SETTING): vol.Schema(
+                    {
+                        vol.Required(RASC_ENTITY_ID): cv.string,
+                        vol.Required(RASC_ACTION): cv.string,
+                        vol.Optional(RASC_INTERRUPTION_MOMENT): cv.positive_float,
+                        vol.Optional(RASC_THERMOSTAT): vol.Schema(
+                            {
+                                vol.Required(RASC_THERMOSTAT_START): cv.string,
+                                vol.Required(RASC_THERMOSTAT_TARGET): cv.string,
+                            }
+                        ),
+                    }
+                ),
             }
         )
     },
@@ -172,20 +196,26 @@ def run_experiments(hass: HomeAssistant, rasc: RASCAbstraction):
     """Run experiments."""
 
     async def wrapper(_):
-        LOGGER.info("Run experiments")
+        settings = rasc.config[RASC_EXPERIMENT_SETTING]
+        key = f"{settings[RASC_ENTITY_ID]},{settings[RASC_ACTION]}"
+        if settings[RASC_ACTION] == SERVICE_SET_TEMPERATURE:
+            if RASC_THERMOSTAT not in settings:
+                raise ValueError("Thermostat setting not found")
+            key += f",{settings[RASC_THERMOSTAT][RASC_THERMOSTAT_START]},{settings[RASC_THERMOSTAT][RASC_THERMOSTAT_TARGET]}"
         for i, level in enumerate(range(0, 105, 5)):
-            LOGGER.info("RUN: %d, %d", i + 1, level)
-            avg_complete_time = np.mean(
-                rasc.get_history("climate.rpi_device_thermostat,set_temperature,68,69")
-            )
-            LOGGER.debug(avg_complete_time)
+            LOGGER.debug("RUN: %d, level=%d", i + 1, level)
+            avg_complete_time = np.mean(rasc.get_history(key))
             interruption_time = avg_complete_time * level * 0.01
+            interruption_moment = settings[RASC_INTERRUPTION_MOMENT]
             # a_coro, s_coro, c_coro = hass.services.rasc_call("cover", "open_cover", {"entity_id": "cover.rpi_device_door"})
             a_coro, s_coro, c_coro = hass.services.rasc_call(
                 "climate",
                 "set_temperature",
                 {"temperature": 69, "entity_id": "climate.rpi_device_thermostat"},
-                {"interruption_time": interruption_time, "interruption_moment": 0.8},
+                {
+                    RASC_INTERRUPTION_TIME: interruption_time,
+                    RASC_INTERRUPTION_MOMENT: interruption_moment,
+                },
             )
             await a_coro
             await s_coro
@@ -256,8 +286,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     await component.async_load()
 
-    hass.bus.async_listen_once(
-        EVENT_HOMEASSISTANT_STARTED, run_experiments(hass, component)
-    )
+    if RASC_EXPERIMENT_SETTING in config[DOMAIN]:
+        hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STARTED, run_experiments(hass, component)
+        )
 
     return True
