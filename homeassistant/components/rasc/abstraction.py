@@ -13,7 +13,6 @@ import numpy as np
 from scipy.stats import rv_continuous
 
 from homeassistant.components import notify
-from homeassistant.components.climate import ClimateEntity
 from homeassistant.const import (
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
@@ -44,7 +43,17 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 import homeassistant.util.dt as dt_util
 
-from .const import DEFAULT_FAILURE_TIMEOUT, LOGGER, RASC_ACK, RASC_COMPLETE, RASC_START
+from .const import (
+    DEFAULT_FAILURE_TIMEOUT,
+    LOGGER,
+    RASC_ACK,
+    RASC_COMPLETE,
+    RASC_FIXED_HISTORY,
+    RASC_SLO,
+    RASC_START,
+    RASC_USE_UNIFORM,
+    RASC_WORST_Q,
+)
 from .helpers import fire
 
 _R = TypeVar("_R")
@@ -148,8 +157,8 @@ class RASCAbstraction:
         ) or {}
 
         config = {
-            "use_uniform": self.config.get("use_uniform"),
-            "fixed_history": self.config.get("fixed_history"),
+            RASC_USE_UNIFORM: self.config.get(RASC_USE_UNIFORM),
+            RASC_FIXED_HISTORY: self.config.get(RASC_FIXED_HISTORY),
         }
         if entity.platform_value is not None:
             config.update(self.config.get(entity.platform_value) or {})
@@ -377,7 +386,6 @@ class StateDetector:
             )
         else:
             self._polls = get_polls(dist, worst_case_delta=self._worst_Q, SLO=self._slo)
-        # print(self._polls)
         LOGGER.debug("Max polls: %d", len(self._polls))
         self._last_updated: Optional[float] = None
         self._failure_callback = failure_callback
@@ -530,13 +538,14 @@ class RASCState:
         self._store = store
         self._next_response = RASC_ACK
         # tracking
-        if self._service_call.service == "set_temperature":
-            _entity: ClimateEntity = cast(ClimateEntity, entity)
+        if self._service_call.service == "set_temperature" and hasattr(
+            self._entity, "current_temperature"
+        ):
             key = ",".join(
                 (
-                    _entity.entity_id,
+                    self._entity.entity_id,
                     self._service_call.service,
-                    str(math.floor(_entity.current_temperature or _entity.min_temp)),
+                    str(math.floor(self._entity.current_temperature)),
                     str(math.floor(self._service_call.data["temperature"])),
                 )
             )
@@ -628,7 +637,6 @@ class RASCState:
 
         for attr, match in target_state.items():
             entity_attr = getattr(self._entity, attr)
-            # print(attr, entity_attr)
             if entity_attr is None:
                 LOGGER.warning(
                     "Entity %s does not have attribute %s", self._entity.entity_id, attr
@@ -711,7 +719,7 @@ class RASCState:
             # fire start response if haven't
             if not self.started:
                 await self.set_started()
-                if not self._config.get("fixed_history"):
+                if not self._config.get(RASC_FIXED_HISTORY):
                     self._update_store(tts=True)
                 fire(
                     self.hass,
@@ -723,7 +731,7 @@ class RASCState:
                 )
 
             await self.set_completed()
-            if not self._config.get("fixed_history"):
+            if not self._config.get(RASC_FIXED_HISTORY):
                 self._update_store(ttc=True)
             fire(
                 self.hass,
@@ -749,7 +757,7 @@ class RASCState:
                     self._service_call.data,
                 )
                 await self.set_started()
-                if not self._config.get("fixed_history"):
+                if not self._config.get(RASC_FIXED_HISTORY):
                     self._update_store(tts=True)
 
         # update current state
@@ -777,9 +785,9 @@ class RASCState:
         self._c_detector = StateDetector(
             history.ct_history,
             self._complete_state,
-            worst_Q=self._config.get("worst_q"),
-            SLO=self._config.get("slo"),
-            uniform=self._config.get("use_uniform"),
+            worst_Q=self._config.get(RASC_WORST_Q),
+            SLO=self._config.get(RASC_SLO),
+            uniform=self._config.get(RASC_USE_UNIFORM),
             failure_callback=self.on_failure_detected,
         )
         # fire failure if exceed upper_bound
