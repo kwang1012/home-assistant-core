@@ -2,6 +2,7 @@
   "domain": "light",
   "name": "Light",
   "codeowners": ["@home-assistant/core"],
+  "dependencies": ["rasc"],
   "documentation": "https://www.home-assistant.io/integrations/light",
   "integration_type": "entity",
   "quality_scale": "internal"

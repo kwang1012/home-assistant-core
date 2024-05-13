@@ -66,6 +66,7 @@ from .log import LOG_PATH, TRAIL, set_logger
 from .metrics import ScheduleMetrics
 
 CONF_ROUTINE_ID = "routine_id"
+CONF_ROUTINE_LOCK_STATUS = "routine_lock_status"
 CONF_STEP = "step"
 CONF_END_VIRTUAL_NODE = "end_virtual_node"
 
@@ -2257,6 +2258,10 @@ class RascalScheduler(BaseScheduler):
 
     def _get_scheduler(self) -> BaseScheduler | TimeLineScheduler | None:
         """Get scheduler."""
+        if SCHEDULING_POLICY in ("fcfs", "fcfs_post"):
+            return FirstComeFirstServeScheduler(
+                self._hass, self._lineage_table, self._serialization_order
+            )
 
         if self._scheduling_policy in (FCFS, FCFS_POST):
             return FirstComeFirstServeScheduler(
@@ -2330,6 +2335,23 @@ class RascalScheduler(BaseScheduler):
                 )
 
         _LOGGER.debug("Add routine %s to the serialization order", routine.routine_id)
+        output_all(_LOGGER, serialization_order=self._serialization_order)
+
+        # Move the routine forward if prelease
+        filtered_status = {
+            key: value for key, value in lock_leasing_status.items() if value == "pre"
+        }
+
+        for key in filtered_status:
+            idx1 = self._serialization_order.index(routine.routine_id)
+            idx2 = self._serialization_order.index(key)
+
+            if idx1 > idx2:
+                self._remove_routine_from_serialization_order(routine.routine_id)
+                self._serialization_order.insert_before(
+                    key, routine.routine_id, routine
+                )
+
         output_all(_LOGGER, serialization_order=self._serialization_order)
 
     def _remove_routine_from_serialization_order(self, routine_id: str) -> None:

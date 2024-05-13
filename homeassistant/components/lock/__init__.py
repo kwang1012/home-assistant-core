@@ -28,6 +28,7 @@ from homeassistant.const import (
     STATE_LOCKING,
     STATE_UNLOCKED,
     STATE_UNLOCKING,
+    Platform,
 )
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 import homeassistant.helpers.config_validation as cv
@@ -159,6 +160,11 @@ class LockEntity(Entity):
     _attr_supported_features: LockEntityFeature = LockEntityFeature(0)
     _lock_option_default_code: str = ""
     __code_format_cmp: re.Pattern[str] | None = None
+
+    @property
+    def platform_value(self) -> str:
+        """Return entity platform value."""
+        return Platform.LOCK.value
 
     @property
     def changed_by(self) -> str | None:

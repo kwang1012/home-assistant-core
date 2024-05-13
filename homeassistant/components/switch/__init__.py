@@ -14,6 +14,7 @@ from homeassistant.const import (
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     STATE_ON,
+    Platform,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import (  # noqa: F401
@@ -106,6 +107,11 @@ class SwitchEntity(ToggleEntity):
 
     entity_description: SwitchEntityDescription
     _attr_device_class: SwitchDeviceClass | None
+
+    @property
+    def platform_value(self) -> str:
+        """Return entity platform value."""
+        return Platform.SWITCH.value
 
     @property
     def device_class(self) -> SwitchDeviceClass | None:

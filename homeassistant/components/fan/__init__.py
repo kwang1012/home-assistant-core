@@ -23,6 +23,7 @@ from homeassistant.const import (
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     STATE_ON,
+    Platform,
 )
 from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
@@ -198,6 +199,11 @@ class FanEntity(ToggleEntity):
     _attr_preset_modes: list[str] | None
     _attr_speed_count: int
     _attr_supported_features: FanEntityFeature = FanEntityFeature(0)
+
+    @property
+    def platform_value(self) -> str:
+        """Return entity platform value."""
+        return Platform.FAN.value
 
     def set_percentage(self, percentage: int) -> None:
         """Set the speed of the fan, as a percentage."""

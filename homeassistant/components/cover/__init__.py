@@ -32,6 +32,7 @@ from homeassistant.const import (
     STATE_CLOSING,
     STATE_OPEN,
     STATE_OPENING,
+    Platform,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import (  # noqa: F401
@@ -238,6 +239,11 @@ class CoverEntity(Entity):
     _attr_supported_features: CoverEntityFeature | None
 
     _cover_is_last_toggle_direction_open = True
+
+    @property
+    def platform_value(self) -> str:
+        """Return entity platform value."""
+        return Platform.COVER.value
 
     @property
     def current_cover_position(self) -> int | None:
