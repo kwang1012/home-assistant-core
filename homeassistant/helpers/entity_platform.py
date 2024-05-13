@@ -11,8 +11,6 @@ from typing import TYPE_CHECKING, Any, Protocol
 import voluptuous as vol
 
 from homeassistant import config_entries
-
-# from homeassistant.components.light import ATTR_TRANSITION
 from homeassistant.const import (
     ATTR_RESTORED,
     DEVICE_DEFAULT_NAME,

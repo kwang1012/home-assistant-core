@@ -6,10 +6,12 @@ from collections.abc import Callable, Coroutine
 import datetime
 from datetime import timedelta
 import json
+import math
 import time
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Optional, TypeVar, cast
 
 import numpy as np
+from scipy.stats import rv_continuous
 
 from homeassistant.components import notify
 from homeassistant.const import (
@@ -29,6 +31,7 @@ from homeassistant.core import (
 )
 from homeassistant.helpers.dynamic_polling import get_best_distribution, get_polls
 from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.entity_component import EntityComponent
 from homeassistant.helpers.entity_platform import EntityPlatform
 from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.helpers.storage import Store
@@ -69,7 +72,7 @@ class RASCAbstraction:
         return entities
 
     def _track_service(self, context: Context, service_call: ServiceCall):
-        component = self.hass.data.get(service_call.domain)
+        component: Optional[EntityComponent] = self.hass.data.get(service_call.domain)
         if not component or not hasattr(component, "async_get_platforms"):
             return
         entity_ids = self._get_entity_ids(service_call)
@@ -78,8 +81,39 @@ class RASCAbstraction:
             for entity in entities:
                 self._states[entity.entity_id].start_tracking(platform)
 
+    def _get_action_length_estimate(self, state: RASCState) -> float:
+        if not state.start_time:
+            raise ValueError("start_time must be provided.")
+        return state.compl_time_estimation - state.start_time
+
+    def get_action_length_estimate(
+        self,
+        entity_id: str,
+        action: str | None = None,
+        transition: float | None = None,
+        quart: float | None = None,
+    ) -> float:
+        """Get an action length estimate."""
+        state = self._states.get(entity_id)
+        if not state:
+            if not action:
+                raise ValueError("action must be provided.")
+            if not transition:
+                transition = 0.0
+            key = ",".join((entity_id, action, str(transition)))
+            histories = self._store.histories
+            if key not in histories:
+                histories[key] = RASCHistory()
+            history = histories[key].ct_history
+            if not history:
+                return transition
+            dist = get_best_distribution(history)
+            return dist.mean()
+
+        return self._get_action_length_estimate(state)
+
     def _init_states(self, context: Context, service_call: ServiceCall):
-        component = self.hass.data.get(service_call.domain)
+        component: Optional[EntityComponent] = self.hass.data.get(service_call.domain)
         if not component or not hasattr(component, "async_get_platforms"):
             return
         entity_ids = self._get_entity_ids(service_call)
@@ -212,7 +246,7 @@ class RASCAbstraction:
                     failed_actions.append(entity_id)
                 else:
                     successful_actions.append(entity_id)
-                del self._states[entity_id]
+                # del self._states[entity_id]
             message = {
                 "action": service_call.service,
                 "successful": successful_actions,
@@ -290,7 +324,7 @@ class StateDetector:
         """Init State Detector."""
         # for failure detection
         self._complete_state: dict[str, Any] = complete_state or {}
-        self._progress: dict[str, Any] = {}
+        self._progress: dict[str, list[tuple[float, Any]]] = {}
         self._next_q: float = 1
         self._check_failure = False
 
@@ -310,10 +344,10 @@ class StateDetector:
             self._attr_upper_bound = None
             return
         # TODO: put this in bg # pylint: disable=fixme
-        dist = get_best_distribution(history)
+        dist: rv_continuous = get_best_distribution(history)
         self._attr_upper_bound = dist.ppf(0.99)
         self._polls = get_polls(dist, worst_case_delta=worst_Q)
-        self._last_updated = None
+        self._last_updated: Optional[float] = None
         self._failure_callback = failure_callback
 
     @property
@@ -331,7 +365,7 @@ class StateDetector:
         """Set checking failure."""
         self._check_failure = value
 
-    async def add_progress(self, progress):
+    async def add_progress(self, progress: dict[str, Any]):
         """Add progress."""
         if not self.check_failure:
             return
@@ -342,6 +376,20 @@ class StateDetector:
                 self._progress[key] = []
             self._progress[key].append((state, time.time()))
         await self._update_next_q()
+
+    def compl_time_estimation(self) -> float:
+        """Return completion time estimation."""
+        max_predicted_time = 0
+        for key, progress in self._progress.items():
+            if len({p[0] for p in progress}) > 2:
+                x = [item[0] for item in progress]
+                y = [item[1] for item in progress]
+                z = np.polyfit(x, y, 2)
+                p = np.poly1d(z)
+                predicted_time = p(self._complete_state[key].value)
+                if predicted_time > max_predicted_time:
+                    max_predicted_time = predicted_time
+        return max_predicted_time
 
     async def _update_next_q(self):
         next_q = self._next_q
@@ -439,7 +487,7 @@ class RASCState:
         # polling component
         self._platform: EntityPlatform | DataUpdateCoordinator | None = None
         # failure detection
-        self._current_state = entity.__dict__
+        self._current_state = self._request_state = entity.__dict__
 
     @property
     def time_elapsed(self) -> float:
@@ -447,6 +495,11 @@ class RASCState:
         if not self._exec_time:
             return 0
         return time.time() - self._exec_time
+
+    @property
+    def entity(self) -> Entity:
+        """Return the entity."""
+        return self._entity
 
     @property
     def failed(self) -> bool:
@@ -459,9 +512,21 @@ class RASCState:
         return self._attr_started
 
     @property
+    def start_time(self) -> float | None:
+        """Return the start time."""
+        return self._exec_time
+
+    @property
     def completed(self) -> bool:
         """Return if the action has completed."""
         return self._attr_completed
+
+    @property
+    def compl_time_estimation(self) -> float:
+        """Return the completion time estimation."""
+        if not self._c_detector:
+            raise ValueError("No complete state detector.")
+        return self._c_detector.compl_time_estimation()
 
     async def _track(self) -> None:
         if not self._platform:
@@ -630,6 +695,8 @@ class RASCState:
         # fire failure if exceed upper_bound
         if self._s_detector.upper_bound and self._c_detector.upper_bound:
             upper_bound = self._s_detector.upper_bound + self._c_detector.upper_bound
+            if math.isnan(upper_bound):
+                upper_bound = DEFAULT_FAILURE_TIMEOUT
         else:
             upper_bound = DEFAULT_FAILURE_TIMEOUT
         async_track_point_in_time(
@@ -726,6 +793,6 @@ class Context:
 class ServiceFailureError(Exception):
     """RASC failure error."""
 
-    def __init__(self, message):
+    def __init__(self, message) -> None:
         """Initialize error."""
         super().__init__(message)

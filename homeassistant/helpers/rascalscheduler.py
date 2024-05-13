@@ -87,8 +87,11 @@ def get_entity_id_from_number(hass: HomeAssistant, entity_id: str) -> str:
     """Get entity_id from number."""
     pattern = re.compile("^[^.]+[.][^.]+$")
     if not pattern.match(entity_id):
-        registry = hass.data[CONF_ENTITY_REGISTRY]
-        return str(registry.async_get(entity_id).as_partial_dict[CONF_ENTITY_ID])
+        registry: er.EntityRegistry = hass.data[CONF_ENTITY_REGISTRY]
+        entity_entry = registry.async_get(entity_id)
+        if not entity_entry or entity_entry.device_id is None:
+            raise ValueError(f"Entity {entity_id} is not a valid entity.")
+        return str(entity_entry.as_partial_dict[CONF_ENTITY_ID])
 
     return str(entity_id)
 
@@ -98,21 +101,31 @@ def get_routine_id(action_id: str) -> str:
     return action_id.split(".")[0]
 
 
-def generate_duration() -> timedelta:
+def generate_duration(seconds: float = 1.0) -> timedelta:
     """Get a random duration."""
-    return timedelta(seconds=2)
+    return timedelta(seconds=seconds)
 
 
 def string_to_datetime(dt: str) -> datetime:
     """Convert string into datetime."""
     return datetime.strptime(
-        datetime.now().strftime("%Y-%m-%d") + " " + dt, "%Y-%m-%d %H%M%S"
+        datetime.now().strftime("%Y-%m-%d") + " " + dt, "%Y-%m-%d %H:%M:%S.%f"
     )
 
 
 def datetime_to_string(dt: datetime) -> str:
     """Convert datetime to string."""
-    return dt.strftime("%H%M%S")
+    return dt.strftime("%H:%M:%S.%f")
+
+
+def time_range_to_string(time_range: tuple) -> str:
+    """Convert time range to string."""
+    start_time: datetime = time_range[0]
+    end_time: Optional[datetime] = time_range[1]
+    text = f"{datetime_to_string(start_time)} - "
+    if end_time is None:
+        return text + "None"
+    return text + datetime_to_string(end_time)
 
 
 def generate_short_uuid(size: int = 5) -> str:
