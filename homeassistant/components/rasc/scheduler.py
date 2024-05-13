@@ -18,6 +18,9 @@ from homeassistant.const import (
     CONF_DEVICE_ID,
     CONF_ENTITY_ID,
     CONF_PARALLEL,
+    CONF_RECORD_RESULTS,
+    CONF_RESCHEDULING_POLICY,
+    CONF_SCHEDULING_POLICY,
     CONF_SEQUENCE,
     CONF_SERVICE,
     CONF_SERVICE_DATA,
@@ -36,7 +39,6 @@ from homeassistant.const import (
     RASC_RESPONSE,
     RASC_SCHEDULED,
     RASC_START,
-    SCHEDULING_POLICY,
     TIMELINE,
 )
 from homeassistant.core import Event, HomeAssistant
@@ -2169,15 +2171,16 @@ class TimeLineScheduler(BaseScheduler):
 class RascalScheduler(BaseScheduler):
     """A class for rascal scheduler."""
 
-    def __init__(self, hass: HomeAssistant, config: ConfigType) -> None:
+    def __init__(
+        self, hass: HomeAssistant, config: ConfigType, result_dir: str
+    ) -> None:
         """Initialize rascal scheduler."""
         self._hass = hass
         self._lineage_table = LineageTable()
         self._serialization_order = Queue[str, RoutineInfo]()
         self._lock_waitlist = dict[str, list[str]]()
         self._wait_queue = Queue[str, WaitRoutineInfo]()
-        self._hass.bus.async_listen(RASC_RESPONSE, self.handle_event)
-        self._scheduling_policy: str = config[SCHEDULING_POLICY]
+        self._scheduling_policy: str = config[CONF_SCHEDULING_POLICY]
         self._scheduler: BaseScheduler | TimeLineScheduler | None = (
             self._get_scheduler()
         )
@@ -2185,7 +2188,11 @@ class RascalScheduler(BaseScheduler):
         self._reschedule_handler: Optional[
             Callable[[Event], Coroutine[Any, Any, None]]
         ] = None
-        self._metrics = ScheduleMetrics(self._scheduling_policy)
+        self._metrics = ScheduleMetrics(config[CONF_RESCHEDULING_POLICY], result_dir)
+        self._record_results = config[CONF_RECORD_RESULTS]
+        if self._record_results:
+            self._result_dir = result_dir
+        self._hass.bus.async_listen(RASC_RESPONSE, self.handle_event)
 
     @property
     def lineage_table(self) -> LineageTable:
@@ -3245,6 +3252,7 @@ class RascalScheduler(BaseScheduler):
         self._release_routine_locks(routine)
         self._remove_routine_from_serialization_order(routine_id)
         output_all(_LOGGER, lock_queues=self._lineage_table.lock_queues)
+        self._metrics.save_metrics(final=True)
 
         if self._scheduling_policy == FCFS:
             self._start_ready_routines_fcfs()
