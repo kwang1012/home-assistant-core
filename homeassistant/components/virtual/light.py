@@ -234,13 +234,16 @@ class VirtualLight(VirtualEntity, LightEntity):
         """Turn the light on."""
         transition = kwargs.get(ATTR_TRANSITION)
         hs_color = kwargs.get(ATTR_HS_COLOR, None)
-        if hs_color is not None and self._attr_supported_features & ColorMode.HS:
+        if (
+            hs_color is not None
+            and ColorMode.COLOR_TEMP in self._attr_supported_color_modes
+        ):
             self._attr_color_mode = ColorMode.HS
             self._attr_hs_color = hs_color
             self._attr_color_temp = None
 
         ct = kwargs.get(ATTR_COLOR_TEMP, None)
-        if ct is not None and self._attr_supported_features & ColorMode.COLOR_TEMP:
+        if ct is not None and ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
             self._attr_color_mode = ColorMode.COLOR_TEMP
             self._attr_color_temp = ct
             self._attr_hs_color = None

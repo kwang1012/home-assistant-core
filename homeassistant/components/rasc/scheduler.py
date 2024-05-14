@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from homeassistant.const import (
     ATTR_ACTION_ID,
+    CONF_CHOOSE,
+    CONF_CONDITION,
     CONF_DELAY,
     CONF_DEVICE_ID,
     CONF_ENTITY_ID,
@@ -98,6 +100,8 @@ def create_routine(
             CONF_PARALLEL not in script
             and CONF_SEQUENCE not in script
             and CONF_SERVICE not in script
+            and CONF_CONDITION not in script
+            and CONF_CHOOSE not in script
             and CONF_DELAY not in script
         ):
             # print("script:", script)
@@ -249,15 +253,11 @@ def _create_routine(
 
             next_parents.append(entities[action_id])
 
-    elif CONF_DELAY in script:
-        hours = script[CONF_DELAY]["hours"]
-        minutes = script[CONF_DELAY]["minutes"]
-        seconds = script[CONF_DELAY]["seconds"]
-        milliseconds = script[CONF_DELAY]["milliseconds"]
+    elif CONF_CONDITION in script or CONF_CHOOSE in script:
+        next_parents = parents
 
-        delta = timedelta(
-            hours=hours, minutes=minutes, seconds=seconds, milliseconds=milliseconds
-        )
+    elif CONF_DELAY in script:
+        delta = timedelta(**script[CONF_DELAY])
 
         for parent in parents:
             parent.delay = delta
@@ -2258,10 +2258,6 @@ class RascalScheduler(BaseScheduler):
 
     def _get_scheduler(self) -> BaseScheduler | TimeLineScheduler | None:
         """Get scheduler."""
-        if SCHEDULING_POLICY in ("fcfs", "fcfs_post"):
-            return FirstComeFirstServeScheduler(
-                self._hass, self._lineage_table, self._serialization_order
-            )
 
         if self._scheduling_policy in (FCFS, FCFS_POST):
             return FirstComeFirstServeScheduler(
@@ -2349,7 +2345,7 @@ class RascalScheduler(BaseScheduler):
             if idx1 > idx2:
                 self._remove_routine_from_serialization_order(routine.routine_id)
                 self._serialization_order.insert_before(
-                    key, routine.routine_id, routine
+                    key, routine.routine_id, routine_info
                 )
 
         output_all(_LOGGER, serialization_order=self._serialization_order)

@@ -1301,6 +1301,7 @@ SERVICE_SCHEMA = vol.All(
             vol.Optional(CONF_ENTITY_ID): comp_entity_ids,
             vol.Optional(CONF_TARGET): vol.Any(TARGET_SERVICE_FIELDS, dynamic_template),
             vol.Optional(CONF_RESPONSE_VARIABLE): str,
+            vol.Optional("depend_on"): list[str],
             # The frontend stores data here. Don't use in core.
             vol.Remove("metadata"): dict,
         }
@@ -1644,6 +1645,7 @@ DEVICE_ACTION_BASE_SCHEMA = vol.Schema(
         **SCRIPT_ACTION_BASE_SCHEMA,
         vol.Required(CONF_DEVICE_ID): string,
         vol.Required(CONF_DOMAIN): str,
+        vol.Optional("depend_on"): list[str],
         vol.Remove("metadata"): dict,
     }
 )
