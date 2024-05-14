@@ -5,6 +5,7 @@ import voluptuous as vol
 
 from homeassistant.components.device_automation import async_validate_entity_schema
 from homeassistant.const import (
+    ATTR_ACTION_ID,
     ATTR_ENTITY_ID,
     CONF_DEVICE_ID,
     CONF_DOMAIN,
@@ -63,6 +64,7 @@ async def async_call_action_from_config(
         DOMAIN,
         SERVICE_PRESS,
         {
+            ATTR_ACTION_ID: variables[ATTR_ACTION_ID] if variables else None,
             ATTR_ENTITY_ID: config[CONF_ENTITY_ID],
         },
         blocking=True,

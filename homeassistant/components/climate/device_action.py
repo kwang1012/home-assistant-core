@@ -8,6 +8,7 @@ from homeassistant.components.device_automation import (
     async_validate_entity_schema,
 )
 from homeassistant.const import (
+    ATTR_ACTION_ID,
     ATTR_ENTITY_ID,
     CONF_DEVICE_ID,
     CONF_DOMAIN,
@@ -85,7 +86,10 @@ async def async_call_action_from_config(
     context: Context | None,
 ) -> None:
     """Execute a device action."""
-    service_data = {ATTR_ENTITY_ID: config[CONF_ENTITY_ID]}
+    service_data = {
+        ATTR_ACTION_ID: variables[ATTR_ACTION_ID] if variables else None,
+        ATTR_ENTITY_ID: config[CONF_ENTITY_ID],
+    }
 
     if config[CONF_TYPE] == "set_hvac_mode":
         service = const.SERVICE_SET_HVAC_MODE
