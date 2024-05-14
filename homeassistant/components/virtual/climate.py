@@ -173,9 +173,11 @@ class VirtualThermostat(VirtualEntity, ClimateEntity):
         return self.hvac_mode != HVACMode.OFF
 
     async def _async_update_temperature(self, target_temperature):
-        if self._dataset is not None:
-            start = math.floor(self._attr_current_temperature)
-            target = math.floor(target_temperature)
+        start = math.floor(self._attr_current_temperature)
+        target = math.floor(target_temperature)
+        if self._dataset is None or target < start:
+            action_length = 1
+        else:
             action = f"{start},{target}"
             if action in self._dataset:
                 action_length = np.random.choice(self._dataset[action])
@@ -189,26 +191,30 @@ class VirtualThermostat(VirtualEntity, ClimateEntity):
                 action_length = (
                     max_action_length / (max_target - start) * (target - start)
                 )
-        else:
-            action_length = 1
         try:
             step = (target_temperature - self._attr_current_temperature) / action_length
+            increasing = step > 0
             while True:
                 self._attr_current_temperature += step
-                if self._attr_current_temperature >= self.max_temp:
-                    self._attr_current_temperature = self.max_temp
+                if increasing and self._attr_current_temperature >= target_temperature:
+                    self._attr_current_temperature = target_temperature
                     self._update_attributes()
                     break
-                if self._attr_current_temperature <= self.min_temp:
-                    self._attr_current_temperature = self.min_temp
+                if (
+                    not increasing
+                    and self._attr_current_temperature <= target_temperature
+                ):
+                    self._attr_current_temperature = target_temperature
                     self._update_attributes()
                     break
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
-            if self._attr_current_temperature >= self.max_temp:
-                self._attr_current_temperature = self.max_temp
-            elif self._attr_current_temperature <= self.min_temp:
-                self._attr_current_temperature = self.min_temp
+            if increasing and self._attr_current_temperature >= target_temperature:
+                self._attr_current_temperature = target_temperature
+            elif (
+                not increasing and self._attr_current_temperature <= target_temperature
+            ):
+                self._attr_current_temperature = target_temperature
             self._update_attributes()
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
