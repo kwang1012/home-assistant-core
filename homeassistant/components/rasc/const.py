@@ -29,3 +29,6 @@ SUPPORTED_PLATFORMS: Final[list[Platform]] = [
     Platform.FAN,
     Platform.CLIMATE,
 ]
+CONF_RESULTS_DIR = "results"
+
+LOGGER = logging.getLogger(__package__)
