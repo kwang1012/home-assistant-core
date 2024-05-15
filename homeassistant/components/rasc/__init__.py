@@ -120,16 +120,16 @@ CONFIG_SCHEMA = vol.Schema(
                 ),
                 vol.Optional("mthresh", default=1.0): cv.positive_float,  # seconds
                 vol.Optional("mithresh", default=2.0): cv.positive_float,  # seconds
+                **{
+                    vol.Optional(platform.value): vol.Schema(
+                        {
+                            vol.Optional(RASC_WORST_Q): cv.positive_float,
+                            vol.Optional(RASC_SLO): cv.positive_float,
+                        }
+                    )
+                    for platform in SUPPORTED_PLATFORMS
+                },
             },
-            {
-                vol.Optional(platform.value): vol.Schema(
-                    {
-                        vol.Optional(RASC_WORST_Q): cv.positive_float,
-                        vol.Optional(RASC_SLO): cv.positive_float,
-                    }
-                )
-                for platform in SUPPORTED_PLATFORMS
-            }
         )
     },
     extra=vol.ALLOW_EXTRA,
@@ -140,7 +140,9 @@ LOGGER.level = logging.DEBUG
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the RASC component."""
-    component = hass.data[DOMAIN] = RASCAbstraction(LOGGER, DOMAIN, hass, config[DOMAIN])
+    component = hass.data[DOMAIN] = RASCAbstraction(
+        LOGGER, DOMAIN, hass, config[DOMAIN]
+    )
     LOGGER.debug("RASC config: %s", config[DOMAIN])
     scheduler = hass.data[DOMAIN_RASCALSCHEDULER] = RascalScheduler(
         hass, config[DOMAIN]

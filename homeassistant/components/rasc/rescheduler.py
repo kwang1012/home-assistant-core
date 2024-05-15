@@ -2581,7 +2581,7 @@ class RascalRescheduler:
 
         if self._scheduling_policy not in (TIMELINE):
             return
-        LOGGER.debug("Handling event %s", event)
+        LOGGER.debug("Handling event in rescheduler%s", event)
         response = event.data.get(CONF_TYPE)
         if response not in (RASC_START, RASC_COMPLETE):
             return
