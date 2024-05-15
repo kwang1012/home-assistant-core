@@ -14,11 +14,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.blueprint import CONF_USE_BLUEPRINT
 from homeassistant.components.rasc.entity import BaseRoutineEntity
-from homeassistant.components.rasc.scheduler import (
-    RascalScheduler,
-    create_routine,
-    output_routine,
-)
+from homeassistant.components.rasc.scheduler import RascalScheduler, create_routine
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_MODE,
@@ -642,13 +638,14 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
             await self.async_enable()
 
         if self.raw_config and self.unique_id:
-            self._routine = create_routine(
-                hass=self.hass,
-                name=self.raw_config["alias"],
-                routine_id=str(self.unique_id),
-                action_script=self.raw_config["action"],
-            )
-            output_routine(str(self.unique_id), self._routine.actions)
+            if self.hass.data.get(DOMAIN_RASCALSCHEDULER):
+                self._routine = create_routine(
+                    hass=self.hass,
+                    name=self.raw_config["alias"],
+                    routine_id=str(self.unique_id),
+                    action_script=self.raw_config["action"],
+                )
+                # output_routine(str(self.unique_id), self._routine.actions)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the entity on and update the state."""
@@ -778,10 +775,9 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
                         # Initialize the routine
                         rascal_scheduler.initialize_routine(routine)
                     else:
-                        return
-                    # await self.action_script.async_run(
-                    #     variables, trigger_context, started_action
-                    # )
+                        await self.action_script.async_run(
+                            variables, trigger_context, started_action
+                        )
             except ServiceNotFound as err:
                 async_create_issue(
                     self.hass,

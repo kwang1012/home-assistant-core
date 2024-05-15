@@ -87,7 +87,7 @@ async def async_call_action_from_config(
 ) -> None:
     """Execute a device action."""
     service_data = {
-        ATTR_ACTION_ID: variables[ATTR_ACTION_ID] if variables else None,
+        ATTR_ACTION_ID: variables.get(ATTR_ACTION_ID) if variables else None,
         ATTR_ENTITY_ID: config[CONF_ENTITY_ID],
     }
 

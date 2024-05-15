@@ -1204,7 +1204,7 @@ ENTITY_SERVICE_FIELDS = {
         ENTITY_MATCH_NONE, vol.All(ensure_list, [vol.Any(dynamic_template, str)])
     ),
     vol.Optional(ATTR_GROUP_ID): str,
-    vol.Optional(ATTR_ACTION_ID): str,
+    vol.Optional(ATTR_ACTION_ID): vol.Any(str, None),
 }
 
 TARGET_SERVICE_FIELDS = {

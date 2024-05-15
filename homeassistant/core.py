@@ -2000,11 +2000,14 @@ class ServiceRegistry:
             context=context,
         )
 
-        rasc: RASCAbstraction = self._hass.data[DOMAIN_RASC]
-        coro, s_coro, c_coro = rasc.execute_service(handler, service_call)
-        s_coro.add_done_callback(lambda _: None)
-        c_coro.add_done_callback(lambda _: None)
-        # coro = self._execute_service(handler, service_call)
+        if DOMAIN_RASC in self._hass.data:
+            rasc: RASCAbstraction = self._hass.data[DOMAIN_RASC]
+            a_coro, s_coro, c_coro = rasc.execute_service(handler, service_call)
+            s_coro.add_done_callback(lambda _: None)
+            c_coro.add_done_callback(lambda _: None)
+            return await a_coro
+
+        coro = self._execute_service(handler, service_call)
         if not blocking:
             self._hass.async_create_task(
                 self._run_service_call_catch_exceptions(coro, service_call),

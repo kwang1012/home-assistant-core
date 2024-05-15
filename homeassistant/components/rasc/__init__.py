@@ -176,6 +176,10 @@ def _save_rasc_configs(configs: ConfigType, result_dir: str) -> None:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the RASC component."""
+
+    if DOMAIN not in config:
+        return True
+
     result_dir = _create_result_dir()
     _save_rasc_configs(config[DOMAIN], result_dir)
 
