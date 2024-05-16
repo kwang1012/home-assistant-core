@@ -50,6 +50,8 @@ from homeassistant.const import (
     REACTIVE,
     RESCHEDULE_ALL,
     RESCHEDULE_SOME,
+    RESCHEDULING_ACCURACY,
+    RESCHEDULING_ESTIMATION,
     RV,
     SHORTEST,
     SJFW,
@@ -61,7 +63,14 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .abstraction import RASCAbstraction
-from .const import CONF_RESULTS_DIR, DOMAIN, LOGGER, RASC_SLO, RASC_WORST_Q, SUPPORTED_PLATFORMS
+from .const import (
+    CONF_RESULTS_DIR,
+    DOMAIN,
+    LOGGER,
+    RASC_SLO,
+    RASC_WORST_Q,
+    SUPPORTED_PLATFORMS,
+)
 from .rescheduler import RascalRescheduler
 from .scheduler import RascalScheduler
 
@@ -136,12 +145,6 @@ CONFIG_SCHEMA = vol.Schema(
                     )
                     for platform in SUPPORTED_PLATFORMS
                 },
-                # vol.Optional(RESCHEDULING_ESTIMATION, default=True): cv.boolean,
-                # vol.Optional(RESCHEDULING_ACCURACY, default=RESCHEDULE_ALL): vol.In(
-                #     supported_rescheduling_accuracies
-                # ),
-                # vol.Optional("mthresh", default=1.0): cv.positive_float,  # seconds
-                # vol.Optional("mithresh", default=2.0): cv.positive_float,  # seconds
             },
         )
     },
@@ -176,7 +179,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     result_dir = _create_result_dir()
     _save_rasc_configs(config[DOMAIN], result_dir)
 
-    component = hass.data[DOMAIN] = RASCAbstraction(LOGGER, DOMAIN, hass, config[DOMAIN])
+    component = hass.data[DOMAIN] = RASCAbstraction(
+        LOGGER, DOMAIN, hass, config[DOMAIN]
+    )
     LOGGER.debug("RASC config: %s", config[DOMAIN])
     scheduler = hass.data[DOMAIN_RASCALSCHEDULER] = RascalScheduler(
         hass, config[DOMAIN], result_dir

@@ -2936,10 +2936,34 @@ class RascalScheduler(BaseScheduler):
 
     async def _start_action(self, action: ActionEntity) -> None:
         """Start the given action."""
+        target_entities = get_target_entities(self._hass, action.action)
+        if not target_entities:
+            raise ValueError(f"Action {action.action_id} has no target entities.")
+        random_entity_id = target_entities[0]
+        action_lock = self.get_action_info(action.action_id, random_entity_id)
+        if not action_lock:
+            raise ValueError(
+                "Action {}'s schedule information on entity {} is missing.".format(
+                    action.action_id, random_entity_id
+                )
+            )
+        og_start_time = action_lock.start_time
 
         if not self._is_action_ready(action):
             _LOGGER.info("Start the action %s later", action.action_id)
             await self._async_wait_until_beginning(action.action_id)
+
+        action_lock = self.get_action_info(action.action_id, random_entity_id)
+        if not action_lock:
+            raise ValueError(
+                "Action {}'s schedule information on entity {} is missing.".format(
+                    action.action_id, random_entity_id
+                )
+            )
+        new_start_time = action_lock.start_time
+        if og_start_time != new_start_time:
+            _LOGGER.debug("Action %s is already started", action.action_id)
+            return
 
         _LOGGER.info("Start the action %s", action.action_id)
         self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
@@ -3013,7 +3037,7 @@ class RascalScheduler(BaseScheduler):
                     )
                 )
             if action_lock.start_time > datetime.now():
-                _LOGGER.error(
+                _LOGGER.debug(
                     "Action %s's start time %s hasn't come",
                     action.action_id,
                     action_lock.start_time,

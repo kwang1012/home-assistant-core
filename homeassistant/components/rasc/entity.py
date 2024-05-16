@@ -386,12 +386,18 @@ class ActionEntity:
     @property
     def all_parents(self) -> set[ActionEntity]:
         """Get all parents."""
-        return set.union(*self.parents.values())
+        all_parents = set()
+        for parent_set in self.parents.values():
+            all_parents.update(parent_set)
+        return all_parents
 
     @property
     def all_children(self) -> set[ActionEntity]:
         """Get all children."""
-        return set.union(*self.children.values())
+        all_children = set()
+        for child_set in self.children.values():
+            all_children.update(child_set)
+        return all_children
 
     def is_descendant_of(self, action_id: str) -> bool:
         """Check if the action is a descendant of the current action."""
