@@ -84,6 +84,7 @@ from .const import (
     RASC_USE_UNIFORM,
     RASC_WORST_Q,
     SUPPORTED_PLATFORMS,
+    CONF_ENABLED,
 )
 from .helpers import OverheadMeasurement
 from .rescheduler import RascalRescheduler
