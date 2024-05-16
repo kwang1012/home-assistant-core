@@ -60,7 +60,7 @@ from homeassistant.helpers.rascalscheduler import (
 from homeassistant.helpers.typing import ConfigType
 
 from .abstraction import RASCAbstraction
-from .const import DOMAIN, MIN_RESCHEDULE_TIME
+from .const import DOMAIN, MIN_RESCHEDULE_TIME, RASC_ACK
 from .entity import ActionEntity, Queue, get_entity_id_from_number
 from .metrics import ScheduleMetrics
 from .scheduler import (
@@ -345,7 +345,7 @@ class BaseRescheduler(TimeLineScheduler):
                 )
             )
         action = action_lock.action
-        for child in action.children:
+        for child in action.all_children:
             if child.action_id in affected_action_ids:
                 continue
             if child.is_end_node:
@@ -612,10 +612,10 @@ class BaseRescheduler(TimeLineScheduler):
                     for pre_action, action in product(
                         routine_actions[prev_routine_id], actions
                     ):
-                        if action not in pre_action.children:
-                            pre_action.children.append(action)
-                        if pre_action not in action.parents:
-                            action.parents.append(pre_action)
+                        if action not in pre_action.children[RASC_COMPLETE]:
+                            pre_action.children[RASC_COMPLETE].add(action)
+                        if pre_action not in action.parents[RASC_COMPLETE]:
+                            action.parents[RASC_COMPLETE].add(pre_action)
 
                 for action in actions:
                     if action.action_id not in actions_with_dependencies:
@@ -678,10 +678,10 @@ class BaseRescheduler(TimeLineScheduler):
                     continue
                 for pre_action in pre_actions_per_entity[entity_id]:
                     # the same action might already have been added on another entity
-                    if action not in pre_action.children:
-                        pre_action.children.append(action)
-                    if pre_action not in action.parents:
-                        action.parents.append(pre_action)
+                    if action not in pre_action.children[RASC_COMPLETE]:
+                        pre_action.children[RASC_COMPLETE].add(action)
+                    if pre_action not in action.parents[RASC_COMPLETE]:
+                        action.parents[RASC_COMPLETE].add(pre_action)
 
         return remaining_descheduled_actions
 
@@ -690,17 +690,17 @@ class BaseRescheduler(TimeLineScheduler):
     ) -> None:
         """Remove the serialization order dependencies from the descheduled actions."""
         for action in descheduled_actions:
-            action.parents = [
+            action.parents[RASC_COMPLETE] = {
                 parent
-                for parent in action.parents
+                for parent in action.parents[RASC_COMPLETE]
                 if get_routine_id(parent.action_id) == get_routine_id(action.action_id)
-            ]
-            action.children = [
+            }
+            action.children[RASC_COMPLETE] = {
                 child
-                for child in action.children
+                for child in action.children[RASC_COMPLETE]
                 if get_routine_id(child.action_id) == get_routine_id(action.action_id)
                 or child.is_end_node
-            ]
+            }
 
     def _find_slot_including_time_range(
         self,
@@ -865,7 +865,7 @@ class BaseRescheduler(TimeLineScheduler):
             # and these actions will be added to the wait queues later
             routine_id = get_routine_id(action.action_id)
             if serializability_guarantee:
-                for parent in action.parents:
+                for parent in action.parents[RASC_COMPLETE]:
                     parent_routine_id = get_routine_id(parent.action_id)
                     if parent_routine_id != routine_id:
                         continue
@@ -942,13 +942,13 @@ class BaseRescheduler(TimeLineScheduler):
                     ] = old_serialization_order[shortest_action_routine_id]
 
             # add children of the chosen action to the affected entities' wait queues
-            for child in shortest_action.children:
+            for child in shortest_action.all_children:
                 if child.is_end_node:
                     continue
 
                 # eligible children are those whose parents are all scheduled
                 eligible = True
-                for parent in child.parents:
+                for parent in child.all_parents:
                     target_entities = get_target_entities(self._hass, parent.action)
                     entity_ids = [
                         get_entity_id_from_number(self._hass, target_entity)
@@ -1105,13 +1105,13 @@ class BaseRescheduler(TimeLineScheduler):
                 ] = self._serialization_order[chosen_action_routine_id]
 
         # add children of the chosen action to the affected entities' wait queues
-        for child in chosen_action.children:
+        for child in chosen_action.all_children:
             if child.is_end_node:
                 continue
 
             # eligible children are those whose parents are all scheduled
             eligible = True
-            for parent in child.parents:
+            for parent in child.all_parents:
                 target_entities = get_target_entities(self._hass, parent.action)
                 entity_ids = [
                     get_entity_id_from_number(self._hass, target_entity)
@@ -1271,7 +1271,7 @@ class BaseRescheduler(TimeLineScheduler):
             # and these actions will be added to the wait queues later
             routine_id = get_routine_id(action_id)
             if serializability_guarantee:
-                for parent in action.parents:
+                for parent in action.all_parents:
                     parent_routine_id = get_routine_id(parent.action_id)
                     if parent_routine_id != routine_id:
                         continue
@@ -1517,11 +1517,14 @@ class BaseRescheduler(TimeLineScheduler):
         index = 0
         while index < len(bfs_actions):
             action = bfs_actions[index]
-            for child in action.children:
-                if child.is_end_node:
+            for dependency in (RASC_ACK, RASC_START, RASC_COMPLETE):
+                if dependency not in action.children:
                     continue
-                if child not in bfs_actions:
-                    bfs_actions.append(child)
+                for child in action.children[dependency]:
+                    if child.is_end_node:
+                        continue
+                    if child not in bfs_actions:
+                        bfs_actions.append(child)
             index += 1
         return bfs_actions
 
@@ -1598,10 +1601,10 @@ class BaseRescheduler(TimeLineScheduler):
                     continue
                 # only when all parents of a child have been visited,
                 # add it to the next batch
-                for child in action.children:
+                for child in action.all_children:
                     if child.is_end_node:
                         continue
-                    if all(parent in visited for parent in child.parents):
+                    if all(parent in visited for parent in child.all_parents):
                         next_batch.add(child)
         return current_sources
 
@@ -1659,34 +1662,40 @@ class BaseRescheduler(TimeLineScheduler):
         if not lock_queues:
             lock_queues = self._lineage_table.lock_queues
         max_parent_end_time = None
-        for parent_action in action.parents:
-            parent_action_id = parent_action.action_id
-            if not parent_action_id:
-                raise ValueError("The parent action does not have an action ID.")
-            target_entities = get_target_entities(self._hass, parent_action.action)
-            for target_entity in target_entities:
-                entity_id = get_entity_id_from_number(self._hass, target_entity)
-                if entity_id not in lock_queues:
-                    raise ValueError("Entity %s has no schedule." % entity_id)
-                if parent_action_id not in lock_queues[entity_id]:
-                    LOGGER.debug(
-                        "Looking for %s's max parent end time", action.action_id
-                    )
-                    raise ValueError(
-                        "Action {} has not been scheduled on entity {}.".format(
-                            parent_action_id, entity_id
+        for dependency, parent_set in action.parents.items():
+            for parent_action in parent_set:
+                parent_action_id = parent_action.action_id
+                if not parent_action_id:
+                    raise ValueError("The parent action does not have an action ID.")
+                target_entities = get_target_entities(self._hass, parent_action.action)
+                for target_entity in target_entities:
+                    entity_id = get_entity_id_from_number(self._hass, target_entity)
+                    if entity_id not in lock_queues:
+                        raise ValueError("Entity %s has no schedule." % entity_id)
+                    if parent_action_id not in lock_queues[entity_id]:
+                        LOGGER.debug(
+                            "Looking for %s's max parent end time", action.action_id
                         )
-                    )
-                parent_lock = lock_queues[entity_id][parent_action_id]
-                if not parent_lock:
-                    raise ValueError(
-                        "Action {}'s schedule information on entity {} is missing.".format(
-                            parent_action_id, entity_id
+                        raise ValueError(
+                            "Action {} has not been scheduled on entity {}.".format(
+                                parent_action_id, entity_id
+                            )
                         )
-                    )
-                parent_end_time = parent_lock.end_time
-                if not max_parent_end_time or parent_end_time > max_parent_end_time:
-                    max_parent_end_time = parent_end_time
+                    parent_lock = lock_queues[entity_id][parent_action_id]
+                    if not parent_lock:
+                        raise ValueError(
+                            "Action {}'s schedule information on entity {} is missing.".format(
+                                parent_action_id, entity_id
+                            )
+                        )
+                    if dependency in (RASC_ACK, RASC_START):
+                        parent_end_time = parent_lock.start_time
+                    elif dependency == RASC_COMPLETE:
+                        parent_end_time = parent_lock.end_time
+                    else:
+                        raise ValueError("Unknown dependency type.")
+                    if not max_parent_end_time or parent_end_time > max_parent_end_time:
+                        max_parent_end_time = parent_end_time
         return max_parent_end_time
 
     def _action_start_time(self, action: ActionEntity) -> datetime:
@@ -2005,39 +2014,50 @@ class BaseRescheduler(TimeLineScheduler):
 
         # parent action check
         parent_actions = action.parents
-        for parent_action in parent_actions:
-            parent_action_id = parent_action.action_id
-            if not parent_action_id:
-                raise ValueError("The parent action does not have an action ID.")
-            parent_target_entities = get_target_entities(
-                self._hass, parent_action.action
-            )
-            for parent_entity in parent_target_entities:
-                parent_entity_id = get_entity_id_from_number(self._hass, parent_entity)
-                if (
-                    parent_action_id
-                    not in self._lineage_table.lock_queues[parent_entity_id]
-                ):
-                    raise ValueError(
-                        "Parent action {} has not been scheduled on entity {}.".format(
-                            parent_action_id, parent_entity_id
-                        )
-                    )
-                parent_action_lock = self._lineage_table.lock_queues[parent_entity_id][
-                    parent_action_id
-                ]
-                if not parent_action_lock:
-                    raise ValueError(
-                        "Parent action {}'s schedule information on entity {} is missing.".format(
-                            parent_action_id, parent_entity_id
-                        )
-                    )
-                parent_action_end_time = parent_action_lock.end_time
-                if latest_action_start and parent_action_end_time > latest_action_start:
-                    return None
-                earliest_action_start = max(
-                    parent_action_end_time, earliest_action_start
+        for dependency, parent_set in parent_actions.items():
+            for parent_action in parent_set:
+                parent_action_id = parent_action.action_id
+                if not parent_action_id:
+                    raise ValueError("The parent action does not have an action ID.")
+                parent_target_entities = get_target_entities(
+                    self._hass, parent_action.action
                 )
+                for parent_entity in parent_target_entities:
+                    parent_entity_id = get_entity_id_from_number(
+                        self._hass, parent_entity
+                    )
+                    if (
+                        parent_action_id
+                        not in self._lineage_table.lock_queues[parent_entity_id]
+                    ):
+                        raise ValueError(
+                            "Parent action {} has not been scheduled on entity {}.".format(
+                                parent_action_id, parent_entity_id
+                            )
+                        )
+                    parent_action_lock = self._lineage_table.lock_queues[
+                        parent_entity_id
+                    ][parent_action_id]
+                    if not parent_action_lock:
+                        raise ValueError(
+                            "Parent action {}'s schedule information on entity {} is missing.".format(
+                                parent_action_id, parent_entity_id
+                            )
+                        )
+                    if dependency in (RASC_ACK, RASC_START):
+                        parent_action_end_time = parent_action_lock.start_time
+                    elif dependency == RASC_COMPLETE:
+                        parent_action_end_time = parent_action_lock.end_time
+                    else:
+                        raise ValueError("Unknown dependency type.")
+                    if (
+                        latest_action_start
+                        and parent_action_end_time > latest_action_start
+                    ):
+                        return None
+                    earliest_action_start = max(
+                        parent_action_end_time, earliest_action_start
+                    )
 
         # serializability check
         action_routine_id = get_routine_id(action.action_id)
@@ -2214,7 +2234,7 @@ class BaseRescheduler(TimeLineScheduler):
                 # self._find_slot_to_move_action_up_to(action.action_id)
                 if action.is_end_node:
                     continue
-                next_actions += action.children
+                next_actions += action.all_children
             metric = 0  # self._calculate_metric()
             if metric < best_metric:
                 best_metric = metric
