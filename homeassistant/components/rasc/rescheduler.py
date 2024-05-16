@@ -345,12 +345,11 @@ class BaseRescheduler(TimeLineScheduler):
                 )
             )
         action = action_lock.action
-        for child in action.all_children:
-            if child.action_id in affected_action_ids:
-                continue
-            if child.is_end_node:
-                continue
-            affected_action_ids.add(child.action_id)
+        if RASC_COMPLETE in action.children:
+            for child in action.children[RASC_COMPLETE]:
+                if child.action_id in affected_action_ids:
+                    continue
+                affected_action_ids.add(child.action_id)
         routine_actions = self._dependent_actions(action_id)
         routine_target = self._target_entities(routine_actions)
 
