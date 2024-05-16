@@ -7,6 +7,7 @@ from homeassistant.const import Platform
 DOMAIN = "rasc"
 LOGGER = logging.getLogger(__package__)
 
+CONF_ENABLED = "enabled"
 RASC_ACK = "ack"
 RASC_START = "start"
 RASC_COMPLETE = "complete"

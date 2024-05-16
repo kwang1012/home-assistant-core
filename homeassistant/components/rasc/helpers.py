@@ -1,6 +1,7 @@
 """RASC integration helpers."""
 from __future__ import annotations
 
+import asyncio
 import csv
 from enum import Enum
 import json
@@ -9,10 +10,60 @@ from logging import Logger
 import math
 from typing import Any
 
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_SERVICE, RASC_RESPONSE
+import psutil
+
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    ATTR_SERVICE,
+    CONF_RESCHEDULING_POLICY,
+    CONF_RESCHEDULING_TRIGGER,
+    CONF_ROUTINE_ARRIVAL_FILENAME,
+    CONF_SCHEDULING_POLICY,
+    RASC_RESPONSE,
+)
 from homeassistant.core import HomeAssistant
 
+from .const import CONF_ENABLED
+
 _LOGGER = logging.getLogger(__name__)
+
+
+class OverheadMeasurement:
+    """Overhead measurement component."""
+
+    def __init__(self, loop, config: dict[str, Any]) -> None:
+        """Initialize the measurement."""
+        self._loop = loop
+        self._terminate_flag = asyncio.Event()
+        self._cpu_usage: list[float] = []
+        self._mem_usage: list[float] = []
+        self._config = config
+
+    def start(self) -> None:
+        """Start the measurement."""
+        _LOGGER.info("Start measurement")
+        self._loop.create_task(self._start())
+
+    async def _start(self) -> None:
+        while not self._terminate_flag.is_set():
+            cpu_usage = psutil.cpu_percent()
+            mem_usage = psutil.virtual_memory().percent
+            self._cpu_usage.append(cpu_usage)
+            self._mem_usage.append(mem_usage)
+            await asyncio.sleep(1)
+
+    def stop(self) -> None:
+        """Stop the measurement."""
+        self._terminate_flag.set()
+        with open("results/" + str(self) + ".json", "w", encoding="utf-8") as f:
+            json.dump({"cpu": self._cpu_usage, "mem": self._mem_usage}, f)
+
+    def __str__(self) -> str:
+        """Return measurement name."""
+        filename = self._config[CONF_ROUTINE_ARRIVAL_FILENAME].split(".")[0]
+        if not self._config.get(CONF_ENABLED):
+            return f"overhead_measurement_{filename}"
+        return f"overhead_measurement_{self._config[CONF_SCHEDULING_POLICY]}_{self._config[CONF_RESCHEDULING_POLICY]}_{self._config[CONF_RESCHEDULING_TRIGGER]}_{filename}"
 
 
 def fire(

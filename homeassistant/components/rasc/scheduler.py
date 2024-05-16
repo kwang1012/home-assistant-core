@@ -3378,6 +3378,7 @@ class RascalScheduler(BaseScheduler):
         output_all(_LOGGER, lock_queues=self._lineage_table.lock_queues)
         self._metrics.save_metrics(final=True)
 
+        self._hass.bus.async_fire("routine_ended", {CONF_ROUTINE_ID: routine_id})
         if self._scheduling_policy == FCFS:
             self._start_ready_routines_fcfs()
 

@@ -64,6 +64,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .abstraction import RASCAbstraction
 from .const import (
+    CONF_ENABLED,
     CONF_RESULTS_DIR,
     DOMAIN,
     LOGGER,
@@ -71,6 +72,7 @@ from .const import (
     RASC_WORST_Q,
     SUPPORTED_PLATFORMS,
 )
+from .helpers import OverheadMeasurement
 from .rescheduler import RascalRescheduler
 from .scheduler import RascalScheduler
 
@@ -110,6 +112,8 @@ CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.Schema(
             {
+                vol.Optional(CONF_ENABLED, default=True): bool,
+                vol.Optional("overhead_measurement", default=False): bool,
                 vol.Optional(CONF_SCHEDULING_POLICY, default=TIMELINE): vol.In(
                     supported_scheduling_policies
                 ),
@@ -177,7 +181,14 @@ def _save_rasc_configs(configs: ConfigType, result_dir: str) -> None:
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the RASC component."""
 
-    if DOMAIN not in config:
+    # cpu/memory measurement
+
+    om = OverheadMeasurement(hass.loop, config[DOMAIN])
+
+    hass.bus.async_listen_once("rasc_measurement_start", lambda _: om.start())
+    hass.bus.async_listen_once("rasc_measurement_stop", lambda _: om.stop())
+
+    if not config[DOMAIN][CONF_ENABLED]:
         return True
 
     result_dir = _create_result_dir()
