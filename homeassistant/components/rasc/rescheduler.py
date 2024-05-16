@@ -2431,6 +2431,7 @@ class RascalRescheduler:
                 affected_source_action_ids,
             )
             serializability = self._resched_policy in (SJFW, OPTIMALW)
+            immutable_serialization_order = None
             if serializability:
                 immutable_serialization_order = (
                     self._rescheduler.immutable_serialization_order(old_end_time)
@@ -2446,7 +2447,7 @@ class RascalRescheduler:
             )
             LOGGER.info("Descheduled actions: %s", list(descheduled_actions.keys()))
             LOGGER.debug("Affected entities: %s", affected_entities)
-            if serializability:
+            if serializability and immutable_serialization_order:
                 descheduled_actions = (
                     self._rescheduler.apply_serialization_order_dependencies(
                         immutable_serialization_order, descheduled_actions
@@ -2461,6 +2462,8 @@ class RascalRescheduler:
                     "Descheduled source actions after serialization order: %s",
                     descheduled_source_action_ids,
                 )
+            else:
+                descheduled_source_action_ids = affected_source_action_ids
             if self._resched_policy in (SJFWO, SJFW):
                 # compare to optimal
                 self._rescheduler.optimal(
@@ -2468,7 +2471,7 @@ class RascalRescheduler:
                     descheduled_actions,
                     affected_entities,
                     serializability,
-                    immutable_serialization_order if serializability else None,
+                    immutable_serialization_order,
                     metrics,
                 )
                 self._apply_schedule(old_lt, old_so)
@@ -2491,7 +2494,7 @@ class RascalRescheduler:
                     descheduled_actions,
                     affected_entities,
                     serializability,
-                    immutable_serialization_order if serializability else None,
+                    immutable_serialization_order,
                     metrics,
                 )
             elif self._resched_policy in (OPTIMALW, OPTIMALWO):
@@ -2500,7 +2503,7 @@ class RascalRescheduler:
                     descheduled_actions,
                     affected_entities,
                     serializability,
-                    immutable_serialization_order if serializability else None,
+                    immutable_serialization_order,
                     metrics,
                 )
         if not new_lt:
