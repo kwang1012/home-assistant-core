@@ -1516,14 +1516,13 @@ class BaseRescheduler(TimeLineScheduler):
         index = 0
         while index < len(bfs_actions):
             action = bfs_actions[index]
-            for dependency in (RASC_ACK, RASC_START, RASC_COMPLETE):
-                if dependency not in action.children:
+            if RASC_COMPLETE not in action.children:
+                continue
+            for child in action.children[RASC_COMPLETE]:
+                if child.is_end_node:
                     continue
-                for child in action.children[dependency]:
-                    if child.is_end_node:
-                        continue
-                    if child not in bfs_actions:
-                        bfs_actions.append(child)
+                if child not in bfs_actions:
+                    bfs_actions.append(child)
             index += 1
         return bfs_actions
 
