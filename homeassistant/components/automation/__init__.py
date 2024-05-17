@@ -267,12 +267,12 @@ def trigger_automations_later(
     routine_aliases = dict[str, str]()
     with open(routine_arrival_pathname, encoding="utf-8") as f:
         for line in f:
-            interarrival_time, routine_id, alias = line.strip().split(",")
+            interarrival_time, routine_id, routine_alias = line.strip().split(",")
             arrival_time = arrival_time + float(interarrival_time)
             if routine_id not in routine_arrivals:
                 routine_arrivals[routine_id] = []
             routine_arrivals[routine_id].append(arrival_time)
-            routine_aliases[routine_id] = alias
+            routine_aliases[routine_id] = routine_alias
 
     async def trigger_automation_later(
         automation: BaseAutomationEntity, arrival_time: float
