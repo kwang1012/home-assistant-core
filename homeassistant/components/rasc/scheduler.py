@@ -151,6 +151,8 @@ def create_routine(
                     raise ValueError(
                         f"Invalid dependency types {dependency_types_script}"
                     )
+            else:
+                dependency_types = [RASC_COMPLETE]
 
             if next_parents:
                 if not dependency_types:
@@ -291,6 +293,8 @@ def _create_routine(  # noqa: C901
                     raise ValueError(
                         f"Invalid dependency types {dependency_types_script}"
                     )
+            else:
+                dependency_types = [RASC_COMPLETE]
 
             if parents:
                 if not dependency_types:
@@ -363,6 +367,8 @@ def _create_routine(  # noqa: C901
                 dependency_types = dependency_types_script
             else:
                 raise ValueError(f"Invalid dependency types {dependency_types_script}")
+        else:
+            dependency_types = [RASC_COMPLETE]
 
         if parents:
             if not dependency_types:

@@ -711,7 +711,7 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
         """
 
         self._logger.info(
-            "Trigger automation %s:\nrun variables: %s\ncontext: %s, skip_condition: %s",
+            "Trigger automation %s:\nrun variables: %s, context: %s, skip_condition: %s",
             self.unique_id,
             run_variables,
             context,
