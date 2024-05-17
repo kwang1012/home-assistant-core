@@ -470,6 +470,7 @@ class CoverEntity(Entity):
         def _target_position(
             target_complete_state: int,
         ) -> Callable[[int], int]:
+            @rasc_target_state(target_complete_state)
             def match(value: int) -> bool:
                 return value == target_complete_state
 

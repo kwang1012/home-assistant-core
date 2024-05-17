@@ -108,35 +108,41 @@ class BaseRoutineEntity:
             if not entity.is_end_node:
                 new_action_id = new_routine_id + "." + action_id.split(".")[1]
 
-                for parent in entity.parents:
-                    new_parent_action_id = (
-                        new_routine_id + "." + parent.action_id.split(".")[1]
-                    )
-                    routine_entity[new_action_id].parents.append(
-                        routine_entity[new_parent_action_id]
-                    )
-
-                for child in entity.children:
-                    if not child.is_end_node:
-                        new_child_action_id = (
-                            new_routine_id + "." + child.action_id.split(".")[1]
+                for dependency, parent_set in entity.parents.items():
+                    routine_entity[new_action_id].parents[dependency] = set()
+                    for parent in parent_set:
+                        new_parent_action_id = (
+                            new_routine_id + "." + parent.action_id.split(".")[1]
+                        )
+                        routine_entity[new_action_id].parents[dependency].add(
+                            routine_entity[new_parent_action_id]
                         )
 
-                        routine_entity[new_action_id].children.append(
-                            routine_entity[new_child_action_id]
-                        )
-                    else:
-                        routine_entity[new_action_id].children.append(
-                            routine_entity[CONF_END_VIRTUAL_NODE]
-                        )
+                for dependency, child_set in entity.children.items():
+                    routine_entity[new_action_id].children[dependency] = set()
+                    for child in child_set:
+                        if not child.is_end_node:
+                            new_child_action_id = (
+                                new_routine_id + "." + child.action_id.split(".")[1]
+                            )
+
+                            routine_entity[new_action_id].children[dependency].add(
+                                routine_entity[new_child_action_id]
+                            )
+                        else:
+                            routine_entity[new_action_id].children[dependency].add(
+                                routine_entity[CONF_END_VIRTUAL_NODE]
+                            )
             else:
-                for parent in entity.parents:
-                    new_parent_action_id = (
-                        new_routine_id + "." + parent.action_id.split(".")[1]
-                    )
-                    routine_entity[CONF_END_VIRTUAL_NODE].parents.append(
-                        routine_entity[new_parent_action_id]
-                    )
+                for dependency, parent_set in entity.parents.items():
+                    routine_entity[CONF_END_VIRTUAL_NODE].parents[dependency] = set()
+                    for parent in parent_set:
+                        new_parent_action_id = (
+                            new_routine_id + "." + parent.action_id.split(".")[1]
+                        )
+                        routine_entity[CONF_END_VIRTUAL_NODE].parents[dependency].add(
+                            routine_entity[new_parent_action_id]
+                        )
 
         if not self._last_trigger_time:
             self._start_time = time.time()
@@ -171,10 +177,10 @@ class BaseRoutineEntity:
             parents = []
             children = []
 
-            for parent in entity.parents:
+            for parent in entity.all_parents:
                 parents.append(parent.action_id)
 
-            for child in entity.children:
+            for child in entity.all_children:
                 children.append(child.action_id)
 
             entity_json = {
@@ -264,7 +270,7 @@ class RoutineEntity(BaseRoutineEntity):
             action_id
             for action_id, action in self.actions.items()
             if len(action.children) == 1
-            and all(child.is_end_node for child in action.children)
+            and all(child.is_end_node for child in action.all_children)
         ]
 
     @property
@@ -274,7 +280,7 @@ class RoutineEntity(BaseRoutineEntity):
             action
             for action in self.actions.values()
             if len(action.children) == 1
-            and all(child.is_end_node for child in action.children)
+            and all(child.is_end_node for child in action.all_children)
         ]
 
 
@@ -300,8 +306,8 @@ class ActionEntity:
         self.action_acked = False
         self.action_started = False
         self.action_completed = False
-        self.parents: list[ActionEntity] = []
-        self.children: list[ActionEntity] = []
+        self.parents = dict[str, set[ActionEntity]]()
+        self.children = dict[str, set[ActionEntity]]()
         self.duration = duration
         self.delay = delay
         self.variables = variables
@@ -310,14 +316,23 @@ class ActionEntity:
         self._set_logger(logger)
         self._stop = asyncio.Event()
         self._attr_is_end_node = is_end_node
+        self.start_requested: bool = False
 
     def __repr__(self) -> str:
         """Return the string representation of the action entity."""
+        parents_str = {
+            dependency: {parent.action_id for parent in parent_set}
+            for dependency, parent_set in self.parents.items()
+        }
+        children_str = {
+            dependency: {child.action_id for child in child_set}
+            for dependency, child_set in self.children.items()
+        }
         return (
             f"ActionEntity({self.action_id}, {self.duration}"
             f"{', end node' if self.is_end_node else ''}"
-            f", parents: {[parent.action_id for parent in self.parents]}"
-            f", children: {[child.action_id if not child.is_end_node else 'end' for child in self.children]})"
+            f", parents: {parents_str}"
+            f", children: {children_str})"
         )
 
     def __lt__(self, other: ActionEntity) -> bool:
@@ -369,14 +384,30 @@ class ActionEntity:
         new_entity.children = self.children
         return new_entity
 
+    @property
+    def all_parents(self) -> set[ActionEntity]:
+        """Get all parents."""
+        all_parents = set()
+        for parent_set in self.parents.values():
+            all_parents.update(parent_set)
+        return all_parents
+
+    @property
+    def all_children(self) -> set[ActionEntity]:
+        """Get all children."""
+        all_children = set()
+        for child_set in self.children.values():
+            all_children.update(child_set)
+        return all_children
+
     def is_descendant_of(self, action_id: str) -> bool:
         """Check if the action is a descendant of the current action."""
-        ancestors = self.parents.copy()
+        ancestors = self.all_parents.copy()
         while ancestors:
             ancestor = ancestors.pop()
             if ancestor.action_id == action_id:
                 return True
-            ancestors.extend(ancestor.parents)
+            ancestors.update(ancestor.all_parents)
 
         return False
 
@@ -418,7 +449,9 @@ class ActionEntity:
         """Trigger the function."""
         action = cv.determine_script_action(self.action)
         continue_on_error = self.action.get(CONF_CONTINUE_ON_ERROR, False)
-
+        if self.start_requested:
+            return
+        self.start_requested = True
         try:
             handler = f"_async_{action}_step"
             await getattr(self, handler)()

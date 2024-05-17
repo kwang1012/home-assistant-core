@@ -15,6 +15,7 @@ from homeassistant.const import (
     CONF_CHOOSE,
     CONF_CONDITION,
     CONF_DELAY,
+    CONF_DEPEND_ON,
     CONF_DEVICE_ID,
     CONF_ENTITY_ID,
     CONF_PARALLEL,
@@ -89,7 +90,7 @@ def create_routine(
     rasc: Optional[RASCAbstraction] = hass.data[DOMAIN]
     if not rasc:
         raise ValueError("RASC is not initialized.")
-    next_parents: list[ActionEntity] = []
+    next_parents = list[ActionEntity]()
     entities: dict[str, ActionEntity] = {}
     config: dict[str, Any] = {}
 
@@ -139,11 +140,37 @@ def create_routine(
                 logger=_LOGGER,
             )
 
-            for parent in next_parents:
-                entities[action_id].parents.append(parent)
+            dependency_types: Optional[list[str]] = None
+            if CONF_DEPEND_ON in script:
+                dependency_types_script = script[CONF_DEPEND_ON]
+                if isinstance(dependency_types_script, str):
+                    dependency_types = [dependency_types_script]
+                elif isinstance(dependency_types_script, list):
+                    dependency_types = dependency_types_script
+                else:
+                    raise ValueError(
+                        f"Invalid dependency types {dependency_types_script}"
+                    )
 
-            for parent in next_parents:
-                parent.children.append(entities[action_id])
+            if next_parents:
+                if not dependency_types:
+                    raise ValueError(
+                        f"Dependency types are not defined for action {action_id}"
+                    )
+                if len(dependency_types) != len(next_parents):
+                    if len(dependency_types) != 1:
+                        raise ValueError(
+                            f"Dependency types {dependency_types} do not match the number of parents {len(next_parents)}"
+                        )
+                    dependency_types = dependency_types * len(next_parents)
+
+                for parent, dependency in zip(next_parents, dependency_types):
+                    if dependency not in entities[action_id].parents:
+                        entities[action_id].parents[dependency] = set()
+                    entities[action_id].parents[dependency].add(parent)
+                    if dependency not in parent.children:
+                        parent.children[dependency] = set()
+                    parent.children[dependency].add(entities[action_id])
 
             next_parents.clear()
             next_parents.append(entities[action_id])
@@ -165,13 +192,17 @@ def create_routine(
     )
 
     for parent in next_parents:
-        parent.children.append(entities[CONF_END_VIRTUAL_NODE])
-        entities[CONF_END_VIRTUAL_NODE].parents.append(parent)
+        if RASC_COMPLETE not in parent.children:
+            parent.children[RASC_COMPLETE] = set()
+        parent.children[RASC_COMPLETE].add(entities[CONF_END_VIRTUAL_NODE])
+        if RASC_COMPLETE not in entities[CONF_END_VIRTUAL_NODE].parents:
+            entities[CONF_END_VIRTUAL_NODE].parents[RASC_COMPLETE] = set()
+        entities[CONF_END_VIRTUAL_NODE].parents[RASC_COMPLETE].add(parent)
 
     return BaseRoutineEntity(name, routine_id, entities, action_script)
 
 
-def _create_routine(
+def _create_routine(  # noqa: C901
     hass: HomeAssistant,
     script: dict[str, Any],
     config: dict[str, Any],
@@ -249,9 +280,37 @@ def _create_routine(
                 logger=_LOGGER,
             )
 
-            for parent in parents:
-                entities[action_id].parents.append(parent)
-                parent.children.append(entities[action_id])
+            dependency_types: Optional[list[str]] = None
+            if CONF_DEPEND_ON in script:
+                dependency_types_script = script[CONF_DEPEND_ON]
+                if isinstance(dependency_types_script, str):
+                    dependency_types = [dependency_types_script]
+                elif isinstance(dependency_types_script, list):
+                    dependency_types = dependency_types_script
+                else:
+                    raise ValueError(
+                        f"Invalid dependency types {dependency_types_script}"
+                    )
+
+            if parents:
+                if not dependency_types:
+                    raise ValueError(
+                        f"Dependency types are not defined for action {action_id}"
+                    )
+                if len(dependency_types) != len(parents):
+                    if len(dependency_types) != 1:
+                        raise ValueError(
+                            f"Dependency types {dependency_types} do not match the number of parents {len(parents)}"
+                        )
+                    dependency_types = dependency_types * len(parents)
+
+                for parent, dependency in zip(parents, dependency_types):
+                    if dependency not in entities[action_id].parents:
+                        entities[action_id].parents[dependency] = set()
+                    entities[action_id].parents[dependency].add(parent)
+                    if dependency not in parent.children:
+                        parent.children[dependency] = set()
+                    parent.children[dependency].add(entities[action_id])
 
             next_parents.append(entities[action_id])
 
@@ -295,9 +354,35 @@ def _create_routine(
             logger=_LOGGER,
         )
 
-        for parent in parents:
-            entities[action_id].parents.append(parent)
-            parent.children.append(entities[action_id])
+        dependency_types = None
+        if CONF_DEPEND_ON in script:
+            dependency_types_script = script[CONF_DEPEND_ON]
+            if isinstance(dependency_types_script, str):
+                dependency_types = [dependency_types_script]
+            elif isinstance(dependency_types_script, list):
+                dependency_types = dependency_types_script
+            else:
+                raise ValueError(f"Invalid dependency types {dependency_types_script}")
+
+        if parents:
+            if not dependency_types:
+                raise ValueError(
+                    f"Dependency types are not defined for action {action_id}"
+                )
+            if len(dependency_types) != len(parents):
+                if len(dependency_types) != 1:
+                    raise ValueError(
+                        f"Dependency types {dependency_types} do not match the number of parents {len(parents)}"
+                    )
+                dependency_types = dependency_types * len(parents)
+
+            for parent, dependency in zip(parents, dependency_types):
+                if dependency not in entities[action_id].parents:
+                    entities[action_id].parents[dependency] = set()
+                entities[action_id].parents[dependency].add(parent)
+                if dependency not in parent.children:
+                    parent.children[dependency] = set()
+                parent.children[dependency].add(entities[action_id])
 
         next_parents.append(entities[action_id])
 
@@ -492,10 +577,10 @@ def output_routine(routine_id: str, actions: dict[str, ActionEntity]) -> None:
         parents = []
         children = []
 
-        for parent in entity.parents:
+        for parent in entity.all_parents:
             parents.append(parent.action_id)
 
-        for child in entity.children:
+        for child in entity.all_children:
             children.append(child.action_id)
 
         entity_json = {
@@ -2851,10 +2936,38 @@ class RascalScheduler(BaseScheduler):
 
     async def _start_action(self, action: ActionEntity) -> None:
         """Start the given action."""
+        target_entities = get_target_entities(self._hass, action.action)
+        if not target_entities:
+            raise ValueError(f"Action {action.action_id} has no target entities.")
+        random_entity_id = target_entities[0]
+        action_lock = self.get_action_info(action.action_id, random_entity_id)
+        if not action_lock:
+            raise ValueError(
+                "Action {}'s schedule information on entity {} is missing.".format(
+                    action.action_id, random_entity_id
+                )
+            )
+        og_start_time = action_lock.start_time
 
         if not self._is_action_ready(action):
-            _LOGGER.info("Start the action %s later", action.action_id)
             await self._async_wait_until_beginning(action.action_id)
+
+        action_lock = self.get_action_info(action.action_id, random_entity_id)
+        if not action_lock:
+            raise ValueError(
+                "Action {}'s schedule information on entity {} is missing.".format(
+                    action.action_id, random_entity_id
+                )
+            )
+        new_start_time = action_lock.start_time
+        routine_id = get_routine_id(action.action_id)
+        if (
+            og_start_time != new_start_time
+            or action.start_requested
+            or routine_id not in self._serialization_order
+        ):
+            _LOGGER.debug("Action %s is already started", action.action_id)
+            return
 
         _LOGGER.info("Start the action %s", action.action_id)
         self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
@@ -2928,7 +3041,7 @@ class RascalScheduler(BaseScheduler):
                     )
                 )
             if action_lock.start_time > datetime.now():
-                _LOGGER.error(
+                _LOGGER.debug(
                     "Action %s's start time %s hasn't come",
                     action.action_id,
                     action_lock.start_time,
@@ -3093,8 +3206,11 @@ class RascalScheduler(BaseScheduler):
         if state == RASC_ACK:
             action.action_acked = True
         elif state == RASC_START:
+            action.action_acked = True
             action.action_started = True
         elif state == RASC_COMPLETE:
+            action.action_acked = True
+            action.action_started = True
             action.action_completed = True
 
     def _set_action_acked(self, action_id: str) -> None:
@@ -3139,6 +3255,11 @@ class RascalScheduler(BaseScheduler):
 
     async def _async_wait_until_beginning(self, action_id: str) -> None:
         """Wait until the time reaches the end time of the action."""
+
+        if not self._reschedule_handler:
+            return
+
+        _LOGGER.info("Start the action %s later", action_id)
         action = self.get_action(action_id)
         if not action:
             raise ValueError("Action %s is not found" % action_id)
@@ -3226,13 +3347,25 @@ class RascalScheduler(BaseScheduler):
     # continue to do, need to check condition variable
     def _condition_check(self, action: ActionEntity) -> bool:
         """Condition check."""
-        return all(parent.action_completed for parent in action.parents)
+        satisfied = True
+        for dependency, parent_set in action.parents.items():
+            if dependency == RASC_ACK:
+                satisfied = all(parent.action_acked for parent in parent_set)
+            elif dependency == RASC_START:
+                satisfied = all(parent.action_started for parent in parent_set)
+            elif dependency == RASC_COMPLETE:
+                satisfied = all(parent.action_completed for parent in parent_set)
+            else:
+                raise ValueError("Unknown dependency type %s" % dependency)
+            if not satisfied:
+                return False
+        return satisfied
 
     def _run_next_action(self, action: ActionEntity) -> None:
         """Run the entity's next action."""
 
         # This is not the end of the routine
-        for child in action.children:
+        for child in action.all_children:
             if self._condition_check(child):
                 if not child.is_end_node:
                     self._hass.async_create_task(self._start_action(child))
@@ -3257,6 +3390,7 @@ class RascalScheduler(BaseScheduler):
         output_all(_LOGGER, lock_queues=self._lineage_table.lock_queues)
         self._metrics.save_metrics(final=True)
 
+        self._hass.bus.async_fire("routine_ended", {CONF_ROUTINE_ID: routine_id})
         if self._scheduling_policy == FCFS:
             self._start_ready_routines_fcfs()
 

@@ -14,11 +14,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.blueprint import CONF_USE_BLUEPRINT
 from homeassistant.components.rasc.entity import BaseRoutineEntity
-from homeassistant.components.rasc.scheduler import (
-    RascalScheduler,
-    create_routine,
-    output_routine,
-)
+from homeassistant.components.rasc.scheduler import RascalScheduler, create_routine
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_MODE,
@@ -254,6 +250,7 @@ def blueprint_in_automation(hass: HomeAssistant, entity_id: str) -> str | None:
 
 def trigger_automations_later(
     hass: HomeAssistant,
+    config: ConfigType,
     component: EntityComponent[BaseAutomationEntity],
     routine_arrival_filename: str,
 ) -> None:
@@ -267,13 +264,15 @@ def trigger_automations_later(
     automations = list(component.entities)
     arrival_time = 10.0
     routine_arrivals = dict[str, list[float]]()
+    routine_aliases = dict[str, str]()
     with open(routine_arrival_pathname, encoding="utf-8") as f:
         for line in f:
-            interarrival_time, routine_id = line.split(",")
+            interarrival_time, routine_id, alias = line.strip().split(",")
             arrival_time = arrival_time + float(interarrival_time)
             if routine_id not in routine_arrivals:
                 routine_arrivals[routine_id] = []
             routine_arrivals[routine_id].append(arrival_time)
+            routine_aliases[routine_id] = alias
 
     async def trigger_automation_later(
         automation: BaseAutomationEntity, arrival_time: float
@@ -286,6 +285,12 @@ def trigger_automations_later(
         )
         await asyncio.sleep(arrival_time)
         await automation.async_trigger({"trigger": {"platform": None}})
+        if not config["rasc"].get("enabled"):
+            # if rasc is not enabled, assume all routines take 30 seconds
+            await asyncio.sleep(30)
+            hass.bus.async_fire(
+                "routine_ended", {"routine_id": f"{automation.unique_id}-123"}
+            )
 
     for automation in automations:
         if automation.unique_id in routine_arrivals:
@@ -294,6 +299,31 @@ def trigger_automations_later(
                 hass.async_create_task(
                     trigger_automation_later(automation, arrival_time)
                 )
+    hass.bus.async_fire("rasc_measurement_start")
+
+    remained_routines = {
+        routine_id: len(arrivals) for routine_id, arrivals in routine_arrivals.items()
+    }
+
+    def handle_routine_ended(event: Event) -> None:
+        routine_id = event.data["routine_id"].split("-")[0]
+        remained_routines[routine_id] -= 1
+        # print(
+        #     json.dumps(
+        #         {
+        #             routine_aliases[routine_id]: remains
+        #             for routine_id, remains in remained_routines.items()
+        #         },
+        #         indent=2,
+        #     )
+        # )
+        if all(
+            remained_routine == 0 for remained_routine in remained_routines.values()
+        ):
+            hass.bus.async_fire("rasc_measurement_stop")
+            hass.stop()
+
+    hass.bus.async_listen("routine_ended", handle_routine_ended)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -380,8 +410,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     websocket_api.async_register_command(hass, websocket_config)
 
-    routine_arrival_filename: str = config["rasc"][CONF_ROUTINE_ARRIVAL_FILENAME]
-    trigger_automations_later(hass, component, routine_arrival_filename)
+    if config["rasc"]["overhead_measurement"]:
+
+        def run_experiments(_: Event) -> None:
+            routine_arrival_filename: str = config["rasc"][
+                CONF_ROUTINE_ARRIVAL_FILENAME
+            ]
+            trigger_automations_later(hass, config, component, routine_arrival_filename)
+
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, run_experiments)
 
     return True
 
@@ -642,13 +679,14 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
             await self.async_enable()
 
         if self.raw_config and self.unique_id:
-            self._routine = create_routine(
-                hass=self.hass,
-                name=self.raw_config["alias"],
-                routine_id=str(self.unique_id),
-                action_script=self.raw_config["action"],
-            )
-            output_routine(str(self.unique_id), self._routine.actions)
+            if self.hass.data.get(DOMAIN_RASCALSCHEDULER):
+                self._routine = create_routine(
+                    hass=self.hass,
+                    name=self.raw_config["alias"],
+                    routine_id=str(self.unique_id),
+                    action_script=self.raw_config["action"],
+                )
+                # output_routine(str(self.unique_id), self._routine.actions)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the entity on and update the state."""
@@ -671,6 +709,7 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
 
         This method is a coroutine.
         """
+
         self._logger.info(
             "Trigger automation %s:\nrun variables: %s\ncontext: %s, skip_condition: %s",
             self.unique_id,
@@ -778,10 +817,9 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
                         # Initialize the routine
                         rascal_scheduler.initialize_routine(routine)
                     else:
-                        return
-                    # await self.action_script.async_run(
-                    #     variables, trigger_context, started_action
-                    # )
+                        await self.action_script.async_run(
+                            variables, trigger_context, started_action
+                        )
             except ServiceNotFound as err:
                 async_create_issue(
                     self.hass,

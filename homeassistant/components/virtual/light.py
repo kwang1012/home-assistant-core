@@ -254,7 +254,7 @@ class VirtualLight(VirtualEntity, LightEntity):
                 transition is not None
                 and self._attr_supported_features & LightEntityFeature.TRANSITION
             ):
-                self.hass.create_task(
+                self.hass.async_create_task(
                     self._async_update_brightness(brightness, transition)
                 )
             else:
@@ -286,14 +286,21 @@ class VirtualLight(VirtualEntity, LightEntity):
         if self._attr_brightness is None:
             self._attr_brightness = 0
         step = (brightness - self._attr_brightness) / transition
-        for _ in range(math.ceil(transition)):
-            self._attr_brightness += math.ceil(step)
+        try:
+            for _ in range(math.ceil(transition)):
+                self._attr_brightness += math.ceil(step)
+                if self._attr_brightness < 0:
+                    self._attr_brightness = 0
+                elif self._attr_brightness > brightness:
+                    self._attr_brightness = brightness
+                self._update_attributes()
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
             if self._attr_brightness < 0:
                 self._attr_brightness = 0
             elif self._attr_brightness > brightness:
                 self._attr_brightness = brightness
             self._update_attributes()
-            await asyncio.sleep(1)
 
 
 class CoordinatedVirtualLight(CoordinatedVirtualEntity, VirtualLight):

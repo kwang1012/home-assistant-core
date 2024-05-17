@@ -143,8 +143,8 @@ class ScheduleMetrics:
             f"rescheduling_policy={self._rescheduling_policy}, version={self._version},\n"
             f"arrival_times={arrival_times},\n"
             f"remaining_actions={self._remaining_actions},\n"
-            f"start_times={start_times}, end_times={end_times},\n"
-            f"wait_times={wait_times}, exec_times={exec_times},\n"
+            f"start_times={start_times},\nend_times={end_times},\n"
+            f"wait_times={wait_times},\nexec_times={exec_times},\n"
             f"first_arrival_time={first_arrival_time},\n"
             f"schedule_start={schedule_start},\n"
             f"schedule_end={schedule_end},\naction_times={self._action_times},\n"
@@ -639,25 +639,25 @@ class ScheduleMetrics:
 
     def get(self, metric: str) -> float:
         """Return the schedule metric of interest."""
-        timedelta_metrics = [
-            MIN_LENGTH,
-            MIN_AVG_RTN_WAIT_TIME,
-            MIN_P95_RTN_WAIT_TIME,
-            MIN_AVG_RTN_LATENCY,
-            MIN_P95_RTN_LATENCY,
-            MIN_AVG_IDLE_TIME,
-            MIN_P95_IDLE_TIME,
-        ]
-        float_metrics = [
-            MIN_RTN_EXEC_TIME_STD_DEV,
-            MAX_AVG_PARALLELISM,
-            MAX_P05_PARALLELISM,
-        ]
+        timedelta_metrics = {
+            MIN_LENGTH: self.schedule_length,
+            MIN_AVG_RTN_WAIT_TIME: self.avg_wait_time,
+            MIN_P95_RTN_WAIT_TIME: self.p95_wait_time,
+            MIN_AVG_RTN_LATENCY: self.avg_latency,
+            MIN_P95_RTN_LATENCY: self.p95_latency,
+            MIN_AVG_IDLE_TIME: self.avg_idle_time,
+            MIN_P95_IDLE_TIME: self.p95_idle_time,
+        }
+        float_metrics = {
+            MIN_RTN_EXEC_TIME_STD_DEV: self.exec_time_std_dev,
+            MAX_AVG_PARALLELISM: self.avg_parallelism,
+            MAX_P05_PARALLELISM: self.p05_parallelism,
+        }
         if metric in timedelta_metrics:
-            result_timedelta: timedelta = getattr(self, metric)
+            result_timedelta = timedelta_metrics[metric]
             return result_timedelta.total_seconds()
         if metric in float_metrics:
-            result_float: float = getattr(self, metric)
+            result_float = float_metrics[metric]
             return result_float
 
         raise ValueError(f"Metric {metric} is not supported.")

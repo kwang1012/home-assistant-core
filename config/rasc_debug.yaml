@@ -1,5 +1,5 @@
 scheduling_policy: "tl" # from tl, jit, fcfs, fcfs_post
-rescheduling_policy: "sjfw" # from sjfw, sjfwo, optimalw, optimalwo, rv, early_start, none
+rescheduling_policy: "none" # from sjfw, sjfwo, optimalw, optimalwo, rv, early_start, none
 rescheduling_trigger: "proactive" # from reactive, anticipatory, proactive
 optimal_schedule_metric: "min_avg_rtn_latency"
 # from min_length, min_avg_rtn_wait_time, min_p95_rtn_wait_time,
@@ -9,7 +9,7 @@ optimal_schedule_metric: "min_avg_rtn_latency"
 rescheduling_window: 30
 routine_priority_policy: "earliest" # from shortest, longest, earliest, latest
 record_results: true
-routine_arrival_filename: "arrival_debug.csv"
+routine_arrival_filename: "arrival_morning.csv"
 # rescheduling_estimation: true
 # rescheduling_accuracy: "reschedule_all"
 # mthresh: 1

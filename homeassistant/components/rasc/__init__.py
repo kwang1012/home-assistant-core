@@ -50,6 +50,8 @@ from homeassistant.const import (
     REACTIVE,
     RESCHEDULE_ALL,
     RESCHEDULE_SOME,
+    RESCHEDULING_ACCURACY,
+    RESCHEDULING_ESTIMATION,
     RV,
     SHORTEST,
     SJFW,
@@ -61,7 +63,16 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .abstraction import RASCAbstraction
-from .const import CONF_RESULTS_DIR, DOMAIN, LOGGER, RASC_SLO, RASC_WORST_Q, SUPPORTED_PLATFORMS
+from .const import (
+    CONF_ENABLED,
+    CONF_RESULTS_DIR,
+    DOMAIN,
+    LOGGER,
+    RASC_SLO,
+    RASC_WORST_Q,
+    SUPPORTED_PLATFORMS,
+)
+from .helpers import OverheadMeasurement
 from .rescheduler import RascalRescheduler
 from .scheduler import RascalScheduler
 
@@ -101,6 +112,8 @@ CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.Schema(
             {
+                vol.Optional(CONF_ENABLED, default=True): bool,
+                vol.Optional("overhead_measurement", default=False): bool,
                 vol.Optional(CONF_SCHEDULING_POLICY, default=TIMELINE): vol.In(
                     supported_scheduling_policies
                 ),
@@ -136,12 +149,6 @@ CONFIG_SCHEMA = vol.Schema(
                     )
                     for platform in SUPPORTED_PLATFORMS
                 },
-                # vol.Optional(RESCHEDULING_ESTIMATION, default=True): cv.boolean,
-                # vol.Optional(RESCHEDULING_ACCURACY, default=RESCHEDULE_ALL): vol.In(
-                #     supported_rescheduling_accuracies
-                # ),
-                # vol.Optional("mthresh", default=1.0): cv.positive_float,  # seconds
-                # vol.Optional("mithresh", default=2.0): cv.positive_float,  # seconds
             },
         )
     },
@@ -173,10 +180,23 @@ def _save_rasc_configs(configs: ConfigType, result_dir: str) -> None:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the RASC component."""
+
+    # cpu/memory measurement
+
+    om = OverheadMeasurement(hass.loop, config[DOMAIN])
+
+    hass.bus.async_listen_once("rasc_measurement_start", lambda _: om.start())
+    hass.bus.async_listen_once("rasc_measurement_stop", lambda _: om.stop())
+
+    if not config[DOMAIN][CONF_ENABLED]:
+        return True
+
     result_dir = _create_result_dir()
     _save_rasc_configs(config[DOMAIN], result_dir)
 
-    component = hass.data[DOMAIN] = RASCAbstraction(LOGGER, DOMAIN, hass, config[DOMAIN])
+    component = hass.data[DOMAIN] = RASCAbstraction(
+        LOGGER, DOMAIN, hass, config[DOMAIN]
+    )
     LOGGER.debug("RASC config: %s", config[DOMAIN])
     scheduler = hass.data[DOMAIN_RASCALSCHEDULER] = RascalScheduler(
         hass, config[DOMAIN], result_dir

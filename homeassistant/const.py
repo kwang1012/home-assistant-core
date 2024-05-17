@@ -1233,6 +1233,8 @@ LOCK_STATE_RELEASED: Final = "released"
 LOCK_STATE_LEASED: Final = "leased"
 
 
+CONF_DEPEND_ON: Final = "depend_on"
+
 FCFS: Final = "fcfs"
 FCFS_POST: Final = "fcfs_post"
 JIT: Final = "jit"

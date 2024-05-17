@@ -15,7 +15,7 @@ FAULT_LOG_FILENAME = "home-assistant.log.fault"
 def validate_os() -> None:
     """Validate that Home Assistant is running in a supported operating system."""
     if not sys.platform.startswith(("darwin", "linux")):
-        print(
+        print(  # noqa: T201
             "Home Assistant only supports Linux, OSX and Windows using WSL",
             file=sys.stderr,
         )
@@ -25,7 +25,7 @@ def validate_os() -> None:
 def validate_python() -> None:
     """Validate that the right Python version is running."""
     if sys.version_info[:3] < REQUIRED_PYTHON_VER:
-        print(
+        print(  # noqa: T201
             "Home Assistant requires at least Python "
             f"{REQUIRED_PYTHON_VER[0]}.{REQUIRED_PYTHON_VER[1]}.{REQUIRED_PYTHON_VER[2]}",
             file=sys.stderr,
@@ -47,7 +47,7 @@ def ensure_config_path(config_dir: str) -> None:
                 reason = "is not a directory"
             else:
                 reason = "does not exist"
-            print(
+            print(  # noqa: T201
                 f"Fatal Error: Specified configuration directory {config_dir} {reason}",
                 file=sys.stderr,
             )
@@ -56,7 +56,7 @@ def ensure_config_path(config_dir: str) -> None:
         try:
             os.mkdir(config_dir)
         except OSError as ex:
-            print(
+            print(  # noqa: T201
                 "Fatal Error: Unable to create default configuration "
                 f"directory {config_dir}: {ex}",
                 file=sys.stderr,
@@ -68,7 +68,7 @@ def ensure_config_path(config_dir: str) -> None:
         try:
             os.mkdir(lib_dir)
         except OSError as ex:
-            print(
+            print(  # noqa: T201
                 f"Fatal Error: Unable to create library directory {lib_dir}: {ex}",
                 file=sys.stderr,
             )

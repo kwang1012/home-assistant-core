@@ -191,6 +191,7 @@ class VirtualThermostat(VirtualEntity, ClimateEntity):
                 action_length = (
                     max_action_length / (max_target - start) * (target - start)
                 )
+        # print(f"thermostat from {start} to {target}: {action_length=}")
         try:
             step = (target_temperature - self._attr_current_temperature) / action_length
             increasing = step > 0
