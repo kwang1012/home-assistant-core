@@ -47,11 +47,10 @@ class OverheadMeasurement:
         self._hass.bus.async_listen("reschedule_event", self._handle_reschedule_event)
 
     def _handle_reschedule_event(self, event: Event):
-        if "diff" in event.data:
-            self._reschedule_diffs.append(event.data["diff"])
-            return
         start_time = event.data["from"] - self._start_time
         end_time = event.data["to"] - self._start_time
+        diff = event.data["diff"]
+        self._reschedule_diffs.append(diff)
         self._reschedule_intervals.append((start_time, end_time))
 
     def start(self) -> None:

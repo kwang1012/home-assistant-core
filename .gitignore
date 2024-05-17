@@ -140,3 +140,4 @@ tmp_cache
 # results
 testrun*/
 results/
+experiment_scripts/config-*

@@ -5,7 +5,6 @@ from abc import ABC, abstractmethod
 import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-import json
 import logging
 import os
 from typing import Any, Optional, Protocol, cast
@@ -310,15 +309,15 @@ def trigger_automations_later(
     def handle_routine_ended(event: Event) -> None:
         routine_id = event.data["routine_id"].split("-")[0]
         remained_routines[routine_id] -= 1
-        print(
-            json.dumps(
-                {
-                    routine_aliases[routine_id]: remains
-                    for routine_id, remains in remained_routines.items()
-                },
-                indent=2,
-            )
-        )
+        # print(
+        #     json.dumps(
+        #         {
+        #             routine_aliases[routine_id]: remains
+        #             for routine_id, remains in remained_routines.items()
+        #         },
+        #         indent=2,
+        #     )
+        # )
         if all(
             remained_routine == 0 for remained_routine in remained_routines.values()
         ):

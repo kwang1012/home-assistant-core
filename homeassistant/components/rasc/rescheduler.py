@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import heapq
 from itertools import product
 import logging
-import time
+import time as t
 from typing import Optional
 
 from homeassistant.const import (
@@ -2388,7 +2388,7 @@ class RascalRescheduler:
         self, entity_id: str, action_id: str, diff: timedelta
     ) -> None:
         """Reschedule the entities based on the rescheduling policy."""
-        start_time = time.time()
+        start_time = t.time()
         # Save the old schedule
         old_lt = self._scheduler.lineage_table.duplicate
         old_so = self._scheduler.duplicate_serialization_order
@@ -2548,9 +2548,9 @@ class RascalRescheduler:
             serialization_order=new_so,
         )
         self._apply_schedule(new_lt, new_so)
-        end_time = time.time()
+        end_time = t.time()
         self._hass.bus.async_fire(
-            "reschedule_event", {"from": start_time, "to": end_time}
+            "reschedule_event", {"from": start_time, "to": end_time, "diff": diff}
         )
 
     def _apply_schedule(
@@ -2679,7 +2679,6 @@ class RascalRescheduler:
 
     async def _handle_undertime(self, event: Event) -> None:
         diff = self._action_length_diff(event)
-        self._hass.bus.async_fire("reschedule_event", {"diff": diff.total_seconds()})
         entity_id: Optional[str] = event.data.get(ATTR_ENTITY_ID)
         action_id: Optional[str] = event.data.get(ATTR_ACTION_ID)
         if not entity_id or not action_id:
