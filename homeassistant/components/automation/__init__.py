@@ -269,7 +269,7 @@ def trigger_automations_later(
     routine_arrivals = dict[str, list[float]]()
     with open(routine_arrival_pathname, encoding="utf-8") as f:
         for line in f:
-            interarrival_time, routine_id = line.split(",")
+            interarrival_time, routine_id, routine_alias = line.split(",")
             arrival_time = arrival_time + float(interarrival_time)
             if routine_id not in routine_arrivals:
                 routine_arrivals[routine_id] = []

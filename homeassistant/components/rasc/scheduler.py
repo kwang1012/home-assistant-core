@@ -145,12 +145,14 @@ def create_routine(
                 dependency_types_script = script[CONF_DEPEND_ON]
                 if isinstance(dependency_types_script, str):
                     dependency_types = [dependency_types_script]
-                if isinstance(dependency_types_script, list):
+                elif isinstance(dependency_types_script, list):
                     dependency_types = dependency_types_script
                 else:
                     raise ValueError(
                         f"Invalid dependency types {dependency_types_script}"
                     )
+            else:
+                dependency_types = [RASC_COMPLETE]
 
             if next_parents:
                 if not dependency_types:
@@ -285,12 +287,14 @@ def _create_routine(  # noqa: C901
                 dependency_types_script = script[CONF_DEPEND_ON]
                 if isinstance(dependency_types_script, str):
                     dependency_types = [dependency_types_script]
-                if isinstance(dependency_types_script, list):
+                elif isinstance(dependency_types_script, list):
                     dependency_types = dependency_types_script
                 else:
                     raise ValueError(
                         f"Invalid dependency types {dependency_types_script}"
                     )
+            else:
+                dependency_types = [RASC_COMPLETE]
 
             if parents:
                 if not dependency_types:
@@ -359,10 +363,12 @@ def _create_routine(  # noqa: C901
             dependency_types_script = script[CONF_DEPEND_ON]
             if isinstance(dependency_types_script, str):
                 dependency_types = [dependency_types_script]
-            if isinstance(dependency_types_script, list):
+            elif isinstance(dependency_types_script, list):
                 dependency_types = dependency_types_script
             else:
                 raise ValueError(f"Invalid dependency types {dependency_types_script}")
+        else:
+            dependency_types = [RASC_COMPLETE]
 
         if parents:
             if not dependency_types:
