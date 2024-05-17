@@ -334,6 +334,7 @@ class BaseRescheduler(TimeLineScheduler):
 
         These actions are not running right now, they are scheduled into the future.
         """
+
         affected_action_ids = set[str]()
 
         # the same action's children are affected
@@ -345,11 +346,15 @@ class BaseRescheduler(TimeLineScheduler):
                 )
             )
         action = action_lock.action
+
         if RASC_COMPLETE in action.children:
             for child in action.children[RASC_COMPLETE]:
+                if child.is_end_node:
+                    continue
                 if child.action_id in affected_action_ids:
                     continue
                 affected_action_ids.add(child.action_id)
+
         routine_actions = self._dependent_actions(action_id)
         routine_target = self._target_entities(routine_actions)
 
@@ -369,11 +374,11 @@ class BaseRescheduler(TimeLineScheduler):
             routine_after_src_actions = list(
                 self._current_routine_source_actions(routine_after_id, time)
             )
-            # LOGGER.debug(
-            #     "Routine %s's current source actions: %s",
-            #     routine_after_id,
-            #     routine_after_src_actions,
-            # )
+            LOGGER.debug(
+                "Routine %s's current source actions: %s",
+                routine_after_id,
+                routine_after_src_actions,
+            )
             routine_after_actions = self._bfs_actions(routine_after_src_actions)
             routine_after_target = self._target_entities(routine_after_actions)
             if routine_target.isdisjoint(routine_after_target):
@@ -1517,6 +1522,7 @@ class BaseRescheduler(TimeLineScheduler):
         while index < len(bfs_actions):
             action = bfs_actions[index]
             if RASC_COMPLETE not in action.children:
+                index += 1
                 continue
             for child in action.children[RASC_COMPLETE]:
                 if child.is_end_node:
@@ -1559,9 +1565,9 @@ class BaseRescheduler(TimeLineScheduler):
         visited = set[ActionEntity]()
 
         while next_batch:
-            # LOGGER.debug(
-            #     "Candidates: %s, current_sources: %s", next_batch, current_sources
-            # )
+            LOGGER.debug(
+                "Candidates: %s, current_sources: %s", next_batch, current_sources
+            )
             candidates = next_batch
             next_batch = set[ActionEntity]()
             for action in candidates:
@@ -2454,6 +2460,7 @@ class RascalRescheduler:
                 immutable_serialization_order = (
                     self._rescheduler.immutable_serialization_order(old_end_time)
                 )
+
                 LOGGER.info(
                     "Immutable serialization order: %s", immutable_serialization_order
                 )
@@ -2465,6 +2472,7 @@ class RascalRescheduler:
             )
             LOGGER.info("Descheduled actions: %s", list(descheduled_actions.keys()))
             LOGGER.debug("Affected entities: %s", affected_entities)
+
             if serializability and immutable_serialization_order:
                 descheduled_actions = (
                     self._rescheduler.apply_serialization_order_dependencies(
@@ -2650,7 +2658,7 @@ class RascalRescheduler:
                     action_id, entity_id
                 )
             )
-        exp_end_time = action_lock.end_time
+        exp_end_time = action_lock.end_time.replace(tzinfo=None)
         act_end_time = event.time_fired.replace(tzinfo=None)
         LOGGER.debug(
             "Expected end time: %s, Actual end time: %s, diff: %s",

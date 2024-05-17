@@ -145,7 +145,7 @@ def create_routine(
                 dependency_types_script = script[CONF_DEPEND_ON]
                 if isinstance(dependency_types_script, str):
                     dependency_types = [dependency_types_script]
-                if isinstance(dependency_types_script, list):
+                elif isinstance(dependency_types_script, list):
                     dependency_types = dependency_types_script
                 else:
                     raise ValueError(
@@ -285,7 +285,7 @@ def _create_routine(  # noqa: C901
                 dependency_types_script = script[CONF_DEPEND_ON]
                 if isinstance(dependency_types_script, str):
                     dependency_types = [dependency_types_script]
-                if isinstance(dependency_types_script, list):
+                elif isinstance(dependency_types_script, list):
                     dependency_types = dependency_types_script
                 else:
                     raise ValueError(
@@ -359,7 +359,7 @@ def _create_routine(  # noqa: C901
             dependency_types_script = script[CONF_DEPEND_ON]
             if isinstance(dependency_types_script, str):
                 dependency_types = [dependency_types_script]
-            if isinstance(dependency_types_script, list):
+            elif isinstance(dependency_types_script, list):
                 dependency_types = dependency_types_script
             else:
                 raise ValueError(f"Invalid dependency types {dependency_types_script}")
@@ -2950,7 +2950,6 @@ class RascalScheduler(BaseScheduler):
         og_start_time = action_lock.start_time
 
         if not self._is_action_ready(action):
-            _LOGGER.info("Start the action %s later", action.action_id)
             await self._async_wait_until_beginning(action.action_id)
 
         action_lock = self.get_action_info(action.action_id, random_entity_id)
@@ -2961,7 +2960,12 @@ class RascalScheduler(BaseScheduler):
                 )
             )
         new_start_time = action_lock.start_time
-        if og_start_time != new_start_time:
+        routine_id = get_routine_id(action.action_id)
+        if (
+            og_start_time != new_start_time
+            or action.start_requested
+            or routine_id not in self._serialization_order
+        ):
             _LOGGER.debug("Action %s is already started", action.action_id)
             return
 
@@ -3202,8 +3206,11 @@ class RascalScheduler(BaseScheduler):
         if state == RASC_ACK:
             action.action_acked = True
         elif state == RASC_START:
+            action.action_acked = True
             action.action_started = True
         elif state == RASC_COMPLETE:
+            action.action_acked = True
+            action.action_started = True
             action.action_completed = True
 
     def _set_action_acked(self, action_id: str) -> None:
@@ -3248,6 +3255,11 @@ class RascalScheduler(BaseScheduler):
 
     async def _async_wait_until_beginning(self, action_id: str) -> None:
         """Wait until the time reaches the end time of the action."""
+
+        if not self._reschedule_handler:
+            return
+
+        _LOGGER.info("Start the action %s later", action_id)
         action = self.get_action(action_id)
         if not action:
             raise ValueError("Action %s is not found" % action_id)

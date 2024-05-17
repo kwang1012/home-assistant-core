@@ -316,6 +316,7 @@ class ActionEntity:
         self._set_logger(logger)
         self._stop = asyncio.Event()
         self._attr_is_end_node = is_end_node
+        self.start_requested: bool = False
 
     def __repr__(self) -> str:
         """Return the string representation of the action entity."""
@@ -448,7 +449,9 @@ class ActionEntity:
         """Trigger the function."""
         action = cv.determine_script_action(self.action)
         continue_on_error = self.action.get(CONF_CONTINUE_ON_ERROR, False)
-
+        if self.start_requested:
+            return
+        self.start_requested = True
         try:
             handler = f"_async_{action}_step"
             await getattr(self, handler)()
