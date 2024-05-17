@@ -1295,3 +1295,14 @@ GLOBAL_SHORTEST: Final = "global_shortest"
 GLOBAL_LONGEST: Final = "global_longest"
 
 TIMELINE_UNIT: Final = 1
+
+OVERHEAD_MEASUREMENT: Final = "overhead_measurement"
+ACTION_LENGTH_ESTIMATION: Final = "action_length_estimation"
+MEAN_ESTIMATION: Final = "mean"
+P50_ESTIMATION: Final = "p50"
+P70_ESTIMATION: Final = "p70"
+P80_ESTIMATION: Final = "p80"
+P90_ESTIMATION: Final = "p90"
+P95_ESTIMATION: Final = "p95"
+P99_ESTIMATION: Final = "p99"
+DO_COMPARISON: Final = "do_comparison"

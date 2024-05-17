@@ -14,11 +14,19 @@ from scipy.stats import rv_continuous
 
 from homeassistant.components import notify
 from homeassistant.const import (
+    ACTION_LENGTH_ESTIMATION,
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
     CONF_EVENT,
     CONF_SERVICE,
     CONF_SERVICE_DATA,
+    MEAN_ESTIMATION,
+    P50_ESTIMATION,
+    P70_ESTIMATION,
+    P80_ESTIMATION,
+    P90_ESTIMATION,
+    P95_ESTIMATION,
+    P99_ESTIMATION,
 )
 from homeassistant.core import (
     HassJobType,
@@ -116,7 +124,7 @@ class RASCAbstraction:
             if not action:
                 raise ValueError("action must be provided.")
             if not transition:
-                transition = 0.0
+                transition = 0
             key = ",".join((entity_id, action, str(transition)))
             histories = self._store.histories
             if key not in histories:
@@ -125,7 +133,17 @@ class RASCAbstraction:
             if not history:
                 return transition
             dist = get_best_distribution(history)
-            return dist.mean()
+            estimations = {
+                MEAN_ESTIMATION: dist.mean(),
+                P50_ESTIMATION: dist.ppf(0.5),
+                P70_ESTIMATION: dist.ppf(0.7),
+                P80_ESTIMATION: dist.ppf(0.8),
+                P90_ESTIMATION: dist.ppf(0.9),
+                P95_ESTIMATION: dist.ppf(0.95),
+                P99_ESTIMATION: dist.ppf(0.99),
+            }
+            if self.config[ACTION_LENGTH_ESTIMATION] in estimations:
+                return estimations[self.config[ACTION_LENGTH_ESTIMATION]]
 
         return self._get_action_length_estimate(state)
 

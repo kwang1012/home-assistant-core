@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import heapq
 from itertools import product
 import logging
+import time
 from typing import Optional
 
 from homeassistant.const import (
@@ -20,6 +21,7 @@ from homeassistant.const import (
     CONF_ROUTINE_PRIORITY_POLICY,
     CONF_SCHEDULING_POLICY,
     CONF_TYPE,
+    DO_COMPARISON,
     EARLIEST,
     EARLY_START,
     LATEST,
@@ -2297,6 +2299,7 @@ class RascalRescheduler:
         # self._estimation: bool = config[RESCHEDULING_ESTIMATION]
         # self._resched_accuracy: str = config[RESCHEDULING_ACCURACY]
         self._scheduling_policy: str = config[CONF_SCHEDULING_POLICY]
+        self._do_comparision: bool = config[DO_COMPARISON]
         self._rescheduler = BaseRescheduler(
             self._hass,
             scheduler.lineage_table,
@@ -2385,6 +2388,7 @@ class RascalRescheduler:
         self, entity_id: str, action_id: str, diff: timedelta
     ) -> None:
         """Reschedule the entities based on the rescheduling policy."""
+        start_time = time.time()
         # Save the old schedule
         old_lt = self._scheduler.lineage_table.duplicate
         old_so = self._scheduler.duplicate_serialization_order
@@ -2491,29 +2495,30 @@ class RascalRescheduler:
             else:
                 descheduled_source_action_ids = affected_source_action_ids
             if self._resched_policy in (SJFWO, SJFW):
-                # compare to optimal
-                self._rescheduler.optimal(
-                    descheduled_source_action_ids,
-                    descheduled_actions,
-                    affected_entities,
-                    serializability,
-                    immutable_serialization_order,
-                    metrics,
-                )
-                self._apply_schedule(old_lt, old_so)
-
-                # compare to RV
-                if self._resched_policy in (SJFW):
-                    success = await self._move_device_schedules(old_end_time, diff)
-                    if not success:
-                        raise ValueError("Failed to move device schedules.")
-                    self._rescheduler.RV(new_end_time, metrics)
+                if self._do_comparision:
+                    # compare to optimal
+                    self._rescheduler.optimal(
+                        descheduled_source_action_ids,
+                        descheduled_actions,
+                        affected_entities,
+                        serializability,
+                        immutable_serialization_order if serializability else None,
+                        metrics,
+                    )
                     self._apply_schedule(old_lt, old_so)
 
-                # output_lock_queues(old_lt.lock_queues)
-                self._rescheduler.deschedule_affected_and_later_actions(
-                    affected_source_action_ids
-                )
+                    # compare to RV
+                    if self._resched_policy in (SJFW):
+                        success = await self._move_device_schedules(old_end_time, diff)
+                        if not success:
+                            raise ValueError("Failed to move device schedules.")
+                        self._rescheduler.RV(new_end_time, metrics)
+                        self._apply_schedule(old_lt, old_so)
+
+                    # output_lock_queues(old_lt.lock_queues)
+                    self._rescheduler.deschedule_affected_and_later_actions(
+                        affected_source_action_ids
+                    )
 
                 new_lt, new_so = self._rescheduler.sjf(
                     descheduled_source_action_ids,
@@ -2543,6 +2548,10 @@ class RascalRescheduler:
             serialization_order=new_so,
         )
         self._apply_schedule(new_lt, new_so)
+        end_time = time.time()
+        self._hass.bus.async_fire(
+            "reschedule_event", {"from": start_time, "to": end_time}
+        )
 
     def _apply_schedule(
         self,
@@ -2670,6 +2679,7 @@ class RascalRescheduler:
 
     async def _handle_undertime(self, event: Event) -> None:
         diff = self._action_length_diff(event)
+        self._hass.bus.async_fire("reschedule_event", {"diff": diff.total_seconds()})
         entity_id: Optional[str] = event.data.get(ATTR_ENTITY_ID)
         action_id: Optional[str] = event.data.get(ATTR_ACTION_ID)
         if not entity_id or not action_id:

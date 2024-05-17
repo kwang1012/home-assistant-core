@@ -8,11 +8,13 @@ import json
 import logging
 from logging import Logger
 import math
+import time
 from typing import Any
 
 import psutil
 
 from homeassistant.const import (
+    ACTION_LENGTH_ESTIMATION,
     ATTR_ENTITY_ID,
     ATTR_SERVICE,
     CONF_RESCHEDULING_POLICY,
@@ -21,7 +23,7 @@ from homeassistant.const import (
     CONF_SCHEDULING_POLICY,
     RASC_RESPONSE,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant
 
 from .const import CONF_ENABLED
 
@@ -31,17 +33,31 @@ _LOGGER = logging.getLogger(__name__)
 class OverheadMeasurement:
     """Overhead measurement component."""
 
-    def __init__(self, loop, config: dict[str, Any]) -> None:
+    def __init__(self, hass: HomeAssistant, config: dict[str, Any]) -> None:
         """Initialize the measurement."""
-        self._loop = loop
+        self._loop = hass.loop
+        self._hass = hass
         self._terminate_flag = asyncio.Event()
         self._cpu_usage: list[float] = []
         self._mem_usage: list[float] = []
         self._config = config
+        self._start_time = time.time()
+        self._reschedule_intervals: list[tuple[float, float]] = []
+        self._reschedule_diffs: list[float] = []
+        self._hass.bus.async_listen("reschedule_event", self._handle_reschedule_event)
+
+    def _handle_reschedule_event(self, event: Event):
+        if "diff" in event.data:
+            self._reschedule_diffs.append(event.data["diff"])
+            return
+        start_time = event.data["from"] - self._start_time
+        end_time = event.data["to"] - self._start_time
+        self._reschedule_intervals.append((start_time, end_time))
 
     def start(self) -> None:
         """Start the measurement."""
         _LOGGER.info("Start measurement")
+        self._start_time = time.time()
         self._loop.create_task(self._start())
 
     async def _start(self) -> None:
@@ -56,14 +72,22 @@ class OverheadMeasurement:
         """Stop the measurement."""
         self._terminate_flag.set()
         with open("results/" + str(self) + ".json", "w", encoding="utf-8") as f:
-            json.dump({"cpu": self._cpu_usage, "mem": self._mem_usage}, f)
+            json.dump(
+                {
+                    "cpu": self._cpu_usage,
+                    "mem": self._mem_usage,
+                    "reschedule": self._reschedule_intervals,
+                    "diff": self._reschedule_diffs,
+                },
+                f,
+            )
 
     def __str__(self) -> str:
         """Return measurement name."""
         filename = self._config[CONF_ROUTINE_ARRIVAL_FILENAME].split(".")[0]
         if not self._config.get(CONF_ENABLED):
-            return f"overhead_measurement_{filename}"
-        return f"overhead_measurement_{self._config[CONF_SCHEDULING_POLICY]}_{self._config[CONF_RESCHEDULING_POLICY]}_{self._config[CONF_RESCHEDULING_TRIGGER]}_{filename}"
+            return f"om_{filename}"
+        return f"om_{self._config[CONF_SCHEDULING_POLICY]}_{self._config[CONF_RESCHEDULING_POLICY]}_{self._config[CONF_RESCHEDULING_TRIGGER]}_{self._config[ACTION_LENGTH_ESTIMATION]}_{filename}"
 
 
 def fire(

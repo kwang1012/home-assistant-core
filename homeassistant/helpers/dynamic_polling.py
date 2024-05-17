@@ -123,7 +123,7 @@ dist_list = [
 
 def get_best_distribution(data: list[float]) -> st.rv_continuous:
     """Get distribution based on p value."""
-    if len(data) == 1:
+    if len(set(data)) == 1:
         return st.uniform(0, data[0])
     dist_names = [
         "uniform",

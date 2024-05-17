@@ -11,6 +11,7 @@ import voluptuous as vol
 
 from homeassistant.components.climate import SERVICE_SET_TEMPERATURE
 from homeassistant.const import (
+    ACTION_LENGTH_ESTIMATION,
     ANTICIPATORY,
     CONF_OPTIMAL_SCHEDULE_METRIC,
     CONF_RECORD_RESULTS,
@@ -20,6 +21,7 @@ from homeassistant.const import (
     CONF_ROUTINE_ARRIVAL_FILENAME,
     CONF_ROUTINE_PRIORITY_POLICY,
     CONF_SCHEDULING_POLICY,
+    DO_COMPARISON,
     DOMAIN_RASCALRESCHEDULER,
     DOMAIN_RASCALSCHEDULER,
     EARLIEST,
@@ -38,6 +40,7 @@ from homeassistant.const import (
     LONGEST,
     MAX_AVG_PARALLELISM,
     MAX_P05_PARALLELISM,
+    MEAN_ESTIMATION,
     MIN_AVG_IDLE_TIME,
     MIN_AVG_RTN_LATENCY,
     MIN_AVG_RTN_WAIT_TIME,
@@ -49,6 +52,13 @@ from homeassistant.const import (
     NONE,
     OPTIMALW,
     OPTIMALWO,
+    OVERHEAD_MEASUREMENT,
+    P50_ESTIMATION,
+    P70_ESTIMATION,
+    P80_ESTIMATION,
+    P90_ESTIMATION,
+    P95_ESTIMATION,
+    P99_ESTIMATION,
     PROACTIVE,
     REACTIVE,
     RESCHEDULE_ALL,
@@ -121,13 +131,16 @@ supported_optimal_metrics = [
 ]
 supported_routine_priority_policies = [SHORTEST, LONGEST, EARLIEST, LATEST]
 supported_rescheduling_accuracies = [RESCHEDULE_ALL, RESCHEDULE_SOME]
+supported_action_length_estimations = [MEAN_ESTIMATION, P50_ESTIMATION, P70_ESTIMATION, P80_ESTIMATION, P90_ESTIMATION, P50_ESTIMATION, P70_ESTIMATION, P80_ESTIMATION, P90_ESTIMATION, P95_ESTIMATION, P99_ESTIMATION]
 
 CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.Schema(
             {
                 vol.Optional(CONF_ENABLED, default=True): bool,
-                vol.Optional("overhead_measurement", default=False): bool,
+                vol.Optional(OVERHEAD_MEASUREMENT, default=False): bool,
+                vol.Optional(ACTION_LENGTH_ESTIMATION, default="mean"): vol.In(supported_action_length_estimations),
+                vol.Optional(DO_COMPARISON, default=True): bool,
                 vol.Optional(CONF_SCHEDULING_POLICY, default=TIMELINE): vol.In(
                     supported_scheduling_policies
                 ),
@@ -261,7 +274,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     # cpu/memory measurement
 
-    om = OverheadMeasurement(hass.loop, config[DOMAIN])
+    om = OverheadMeasurement(hass, config[DOMAIN])
 
     hass.bus.async_listen_once("rasc_measurement_start", lambda _: om.start())
     hass.bus.async_listen_once("rasc_measurement_stop", lambda _: om.stop())

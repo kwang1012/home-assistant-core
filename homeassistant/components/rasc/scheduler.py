@@ -78,6 +78,7 @@ CONF_END_VIRTUAL_NODE = "end_virtual_node"
 TIMEOUT = 3000  # millisecond
 
 _LOGGER = set_logger()
+_LOGGER.level = logging.INFO
 
 
 def create_routine(
@@ -111,6 +112,7 @@ def create_routine(
             config[CONF_STEP] = config[CONF_STEP] + 1
             action_id = f"{config[CONF_ROUTINE_ID]}.{config[CONF_STEP]}"
             action: str = script[CONF_TYPE]
+            action_wo_platform = action.split(".")[1]
             if CONF_TRANSITION in script:
                 transition: float | None = script[CONF_TRANSITION]
                 _LOGGER.debug(
@@ -124,7 +126,7 @@ def create_routine(
                 entity_id = get_entity_id_from_number(hass, entity)
                 estimated_entity_duration = (
                     rasc.get_action_length_estimate(
-                        entity_id, action=action, transition=transition
+                        entity_id, action=action_wo_platform, transition=transition
                     )
                     + ACTION_LENGTH_PADDING
                 )
@@ -250,6 +252,7 @@ def _create_routine(  # noqa: C901
             config[CONF_STEP] = config[CONF_STEP] + 1
             action_id = f"{config[CONF_ROUTINE_ID]}.{config[CONF_STEP]}"
             action: str = script[CONF_SERVICE]
+            action_wo_platform = action.split(".")[1]
             if (
                 CONF_SERVICE_DATA in script
                 and CONF_TRANSITION in script[CONF_SERVICE_DATA]
@@ -266,7 +269,7 @@ def _create_routine(  # noqa: C901
                 entity_id = get_entity_id_from_number(hass, target_entity)
                 estimated_entity_duration = (
                     rasc.get_action_length_estimate(
-                        entity_id, action=action, transition=transition
+                        entity_id, action=action_wo_platform, transition=transition
                     )
                     + ACTION_LENGTH_PADDING
                 )
@@ -333,6 +336,7 @@ def _create_routine(  # noqa: C901
         config[CONF_STEP] = config[CONF_STEP] + 1
         action_id = f"{config[CONF_ROUTINE_ID]}.{config[CONF_STEP]}"
         action = script[CONF_TYPE]
+        action_wo_platform = action.split(".")[1]
         if CONF_TRANSITION in script:
             transition = script[CONF_TRANSITION]
             _LOGGER.debug("The transition of action %s is %f", action_id, transition)
@@ -344,7 +348,7 @@ def _create_routine(  # noqa: C901
             entity_id = get_entity_id_from_number(hass, target_entity)
             estimated_entity_duration = (
                 rasc.get_action_length_estimate(
-                    entity_id, action=action, transition=transition
+                    entity_id, action=action_wo_platform, transition=transition
                 )
                 + ACTION_LENGTH_PADDING
             )

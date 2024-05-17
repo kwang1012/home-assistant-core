@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+import json
 import logging
 import os
 from typing import Any, Optional, Protocol, cast
@@ -33,6 +34,7 @@ from homeassistant.const import (
     CONF_ZONE,
     DOMAIN_RASCALSCHEDULER,
     EVENT_HOMEASSISTANT_STARTED,
+    OVERHEAD_MEASUREMENT,
     SERVICE_RELOAD,
     SERVICE_TOGGLE,
     SERVICE_TURN_OFF,
@@ -285,7 +287,7 @@ def trigger_automations_later(
         )
         await asyncio.sleep(arrival_time)
         await automation.async_trigger({"trigger": {"platform": None}})
-        if not config["rasc"].get("enabled"):
+        if "rasc" not in hass.data:
             # if rasc is not enabled, assume all routines take 30 seconds
             await asyncio.sleep(30)
             hass.bus.async_fire(
@@ -308,15 +310,15 @@ def trigger_automations_later(
     def handle_routine_ended(event: Event) -> None:
         routine_id = event.data["routine_id"].split("-")[0]
         remained_routines[routine_id] -= 1
-        # print(
-        #     json.dumps(
-        #         {
-        #             routine_aliases[routine_id]: remains
-        #             for routine_id, remains in remained_routines.items()
-        #         },
-        #         indent=2,
-        #     )
-        # )
+        print(
+            json.dumps(
+                {
+                    routine_aliases[routine_id]: remains
+                    for routine_id, remains in remained_routines.items()
+                },
+                indent=2,
+            )
+        )
         if all(
             remained_routine == 0 for remained_routine in remained_routines.values()
         ):
@@ -410,7 +412,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     websocket_api.async_register_command(hass, websocket_config)
 
-    if config["rasc"]["overhead_measurement"]:
+    if config["rasc"].get(OVERHEAD_MEASUREMENT):
 
         def run_experiments(_: Event) -> None:
             routine_arrival_filename: str = config["rasc"][
