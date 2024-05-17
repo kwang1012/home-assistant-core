@@ -347,6 +347,8 @@ class BaseRescheduler(TimeLineScheduler):
         action = action_lock.action
         if RASC_COMPLETE in action.children:
             for child in action.children[RASC_COMPLETE]:
+                if child.is_end_node:
+                    continue
                 if child.action_id in affected_action_ids:
                     continue
                 affected_action_ids.add(child.action_id)

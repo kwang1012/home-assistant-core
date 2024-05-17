@@ -93,7 +93,7 @@ class ScheduleMetrics:
             self._schedule_start: Optional[datetime] = None
             self._schedule_end: Optional[datetime] = None
             self._action_times = dict[str, dict[str, ActionTimeRange]]()
-            self._last_action_end = dict[str, Optional[datetime]]()
+            self._last_action_end = dict[str, datetime]()
             self._idle_times = dict[str, timedelta]()
             self._parallelism = dict[datetime, int]()
         elif sm:
@@ -136,7 +136,7 @@ class ScheduleMetrics:
             k: datetime_to_string(v) if v else None
             for k, v in self._last_action_end.items()
         }
-        idle_times = {k: v.total_seconds() for k, v in self._idle_times.items()}
+        idle_times = {k: v.total_seconds() for k, v in self.idle_times.items()}
         parallelism = {datetime_to_string(k): v for k, v in self.parallelism.items()}
         return (
             f"ScheduleMetrics(\n"
@@ -276,13 +276,17 @@ class ScheduleMetrics:
         self._parallelism[time] = last_parallelism + 1
 
         # idle time calculation
+        if entity_id not in self._idle_times:
+            self._idle_times[entity_id] = timedelta(0)
         if entity_id in self._last_action_end:
-            if entity_id not in self._idle_times:
-                self._idle_times[entity_id] = timedelta(0)
             last_action_end = self._last_action_end[entity_id]
-            if last_action_end:
-                self._idle_times[entity_id] += time - last_action_end
-        self._last_action_end[entity_id] = None
+            del self._last_action_end[entity_id]
+        elif self._schedule_start:
+            last_action_end = self._schedule_start
+        else:
+            last_action_end = None
+        if last_action_end:
+            self._idle_times[entity_id] += time - last_action_end
 
         # routine start
         self._record_routine_start(action_id, time)
@@ -488,14 +492,13 @@ class ScheduleMetrics:
         idle_times = copy.deepcopy(self._idle_times)
         for entity_id, actions in self._action_times.items():
             sorted_actions = sorted(actions.values(), key=lambda x: x.start_time)
-            last_action_end = self._schedule_start
-            if entity_id in self._last_action_end:
-                last_action_end = self._last_action_end[entity_id]
             if entity_id not in idle_times:
                 idle_times[entity_id] = timedelta(0)
+            last_action_end = self._last_action_end.get(entity_id, self._schedule_start)
             for action in sorted_actions:
-                if last_action_end:
-                    idle_times[entity_id] += action.start_time - last_action_end
+                if not last_action_end:
+                    last_action_end = action.start_time
+                idle_times[entity_id] += action.start_time - last_action_end
                 last_action_end = action.end_time
             if last_action_end and self._schedule_end:
                 idle_times[entity_id] += self._schedule_end - last_action_end
@@ -664,11 +667,11 @@ class ScheduleMetrics:
 
     def save_metrics(self, final: bool = False) -> None:
         """Save the schedule metrics to a file."""
-        LOGGER.debug("Saving schedule metrics to file:\n%s", self)
         if final:
             filename = "schedule_metrics"
         else:
             filename = f"{self._rescheduling_policy}_metrics_{self._version}"
+        LOGGER.debug("Saving schedule metrics to file %s\n%s", filename, self)
         with open(f"{self._result_dir}/{filename}.yaml", "w", encoding="utf-8") as f:
             f.write(f"Schedule Length: {self.schedule_length.total_seconds()}\n")
             f.write(f"Average Wait Time: {self.avg_wait_time.total_seconds()}\n")

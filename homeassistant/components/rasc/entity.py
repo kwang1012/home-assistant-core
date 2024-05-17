@@ -324,7 +324,10 @@ class ActionEntity:
             for dependency, parent_set in self.parents.items()
         }
         children_str = {
-            dependency: {child.action_id for child in child_set}
+            dependency: {
+                child.action_id if not child.is_end_node else "end"
+                for child in child_set
+            }
             for dependency, child_set in self.children.items()
         }
         return (
