@@ -293,10 +293,6 @@ class ScheduleMetrics:
             last_action_end = None
         if last_action_end:
             self._idle_times[entity_id] += time - last_action_end
-        if entity_id == "light.front_door_light":
-            LOGGER.debug(
-                f"Action {action_id} started on entity {entity_id}\nlast_action_end: {self._last_action_end.get(entity_id, '')}, schedule_start: {self._schedule_start}, idle_time: {self._idle_times.get(entity_id, '')}"
-            )
 
         # routine start
         self._record_routine_start(action_id, time)
@@ -322,10 +318,6 @@ class ScheduleMetrics:
 
         # idle time calculation preparation
         self._last_action_end[entity_id] = time
-        if entity_id == "light.front_door_light":
-            LOGGER.debug(
-                f"Action {action_id} ended on entity {entity_id}\nlast_action_end: {self._last_action_end.get(entity_id, '')}"
-            )
 
         self._remove_routine_remaining_action(action_id, entity_id)
 

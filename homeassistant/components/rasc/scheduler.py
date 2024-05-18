@@ -3086,8 +3086,9 @@ class RascalScheduler(BaseScheduler):
             return
 
         if event_type == RASC_ACK:
-            # update the action state
-            self._update_action_state(action_id, entity_id, event_type)
+            if not self.is_action_ack(action, entity_id):
+                # update the action state
+                self._update_action_state(action_id, entity_id, event_type)
 
             # Check if the action is acknowledged
             if self._is_all_actions_ack(action) and not action.action_acked:
@@ -3103,8 +3104,10 @@ class RascalScheduler(BaseScheduler):
                     event.time_fired, entity_id, action_id
                 )
 
-            # update the action state
-            self._update_action_state(action_id, entity_id, event_type)
+                # update the action state
+                self._update_action_state(action_id, entity_id, event_type)
+
+            _LOGGER.info("Action %s on entity %s is started", action_id, entity_id)
 
             # Check if the action has started
             if self._is_all_actions_start(action) and not action.action_started:
@@ -3122,27 +3125,32 @@ class RascalScheduler(BaseScheduler):
             # Emulate action's duration
             await self._async_wait_until(action_id, entity_id)
 
-            if entity_id not in self._lineage_table.lock_queues:
-                raise ValueError("Entity %s has no schedule." % entity_id)
-            if action_id not in self._lineage_table.lock_queues[entity_id]:
-                return
+            # if entity_id not in self._lineage_table.lock_queues:
+            #     raise ValueError("Entity %s has no schedule." % entity_id)
+            # if action_id not in self._lineage_table.lock_queues[entity_id]:
+            #     return
+
+            if not self.is_action_start(action, entity_id):
+                _LOGGER.info("Action %s on entity %s is started", action_id, entity_id)
 
             if not self.is_action_complete(action, entity_id):
                 if not self.is_action_start(action, entity_id):
                     self._metrics.record_action_start(
                         event.time_fired, entity_id, action_id
                     )
+                    _LOGGER.info("Action %s on entity %s is started", action_id, entity_id)
+
                 self._metrics.record_action_end(event.time_fired, entity_id, action_id)
 
-            # update the action state
-            self._update_action_state(action_id, entity_id, event_type)
+                # update the action state
+                self._update_action_state(action_id, entity_id, event_type)
 
             _LOGGER.info("Action %s on entity %s is completed", action_id, entity_id)
 
             output_all(_LOGGER, lock_queues=self._lineage_table.lock_queues)
 
             # Check if the action is completed on all entities
-            if not self._is_all_actions_complete(action):
+            if action.action_completed or not self._is_all_actions_complete(action):
                 return
 
             if self._scheduling_policy == FCFS_POST:
@@ -3404,10 +3412,6 @@ class RascalScheduler(BaseScheduler):
                 if not child.is_end_node:
                     self._hass.async_create_task(self._start_action(child))
                 else:
-                    _LOGGER.info(
-                        "This is the end of the routine %s",
-                        get_routine_id(action.action_id),
-                    )
                     self._handle_end_of_routine(get_routine_id(action.action_id))
 
     def _handle_end_of_routine(self, routine_id: str) -> None:
@@ -3417,6 +3421,8 @@ class RascalScheduler(BaseScheduler):
         if not routine_info:
             raise ValueError("Routine %s is not found in the serialization order")
         routine = routine_info.routine
+
+        _LOGGER.info("This is the end of routine '%s' (%s)", routine.name, routine_id)
 
         self._remove_routine_from_lock_queues(routine)
         self._release_routine_locks(routine)

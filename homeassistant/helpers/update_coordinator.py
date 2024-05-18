@@ -409,6 +409,7 @@ class DataUpdateCoordinator(BaseDataUpdateCoordinatorProtocol, Generic[_DataT]):
         if delay:
             await asyncio.sleep(delay.total_seconds())
         with contextlib.suppress(Exception):
+            print("coordinator Entity id: ", _entity.entity_id)
             self.data = await self._async_update_data()
 
     @callback

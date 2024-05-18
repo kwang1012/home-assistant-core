@@ -727,7 +727,7 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
                 reason = f' by {run_variables["trigger"]["description"]}'
             if "alias" in run_variables["trigger"]:
                 alias = f' trigger \'{run_variables["trigger"]["alias"]}\''
-        self._logger.debug("Automation%s triggered%s", alias, reason)
+        self._logger.debug("Automation %s triggered%s", alias, reason)
 
         # Create a new context referring to the old context.
         parent_id = None if context is None else context.id

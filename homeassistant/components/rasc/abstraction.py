@@ -631,6 +631,7 @@ class RASCState:
             return
         # let platform state polling the state
         next_interval = self._get_polling_interval()
+        LOGGER.debug("Next polling interval for %s: %s", self._entity.entity_id, next_interval)
         await self._platform.track_entity_state(self._entity, next_interval)
         self._polls_used += 1
         await self.update()
@@ -748,18 +749,18 @@ class RASCState:
                     self._service_call.data,
                 )
 
-            if not self.completed:
-                await self.set_completed()
-                if not self._config.get(RASC_FIXED_HISTORY):
-                    self._update_store(ttc=True)
-                fire(
-                    self.hass,
-                    RASC_COMPLETE,
-                    entity_id,
-                    action,
-                    LOGGER,
-                    self._service_call.data,
-                )
+            # if not self.completed:
+            await self.set_completed()
+            if not self._config.get(RASC_FIXED_HISTORY):
+                self._update_store(ttc=True)
+            fire(
+                self.hass,
+                RASC_COMPLETE,
+                entity_id,
+                action,
+                LOGGER,
+                self._service_call.data,
+            )
 
             return
 
