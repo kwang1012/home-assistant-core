@@ -264,7 +264,7 @@ def trigger_automations_later(
         return
 
     automations = list(component.entities)
-    arrival_time = 10.0
+    arrival_time = 0.0
     routine_arrivals = dict[str, list[float]]()
     routine_aliases = dict[str, str]()
     with open(routine_arrival_pathname, encoding="utf-8") as f:

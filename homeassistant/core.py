@@ -2021,6 +2021,7 @@ class ServiceRegistry:
         else:
             processed_data = service_data
 
+        processed_data = {**processed_data, **processed_data.get("params", {})}
         service_call = ServiceCall(
             domain, service, processed_data, context, return_response
         )

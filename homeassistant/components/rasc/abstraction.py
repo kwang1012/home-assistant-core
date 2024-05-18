@@ -125,7 +125,7 @@ class RASCAbstraction:
                 raise ValueError("action must be provided.")
             if not transition:
                 transition = 0
-            key = ",".join((entity_id, action, str(transition)))
+            key = ",".join((entity_id, action, f"{transition:g}"))
             histories = self._store.histories
             if key not in histories:
                 histories[key] = RASCHistory()
@@ -133,7 +133,6 @@ class RASCAbstraction:
             if not history:
                 return transition
             dist = get_best_distribution(history)
-            return dist.ppf(0.4)
             estimations = {
                 MEAN_ESTIMATION: dist.mean(),
                 P50_ESTIMATION: dist.ppf(0.5),
@@ -145,6 +144,7 @@ class RASCAbstraction:
             }
             if self.config[ACTION_LENGTH_ESTIMATION] in estimations:
                 return estimations[self.config[ACTION_LENGTH_ESTIMATION]]
+            return dist.mean()
 
         return self._get_action_length_estimate(state)
 
@@ -411,6 +411,7 @@ class StateDetector:
 
     @property
     def is_warming(self) -> bool:
+        """Return true if warming up."""
         return self._static or self._attr_upper_bound is None
 
     @property
@@ -577,7 +578,7 @@ class RASCState:
                 (
                     self._entity.entity_id,
                     self._service_call.service,
-                    str(self._transition),
+                    f"{self._transition:g}",
                 )
             )
         self._key = key
@@ -636,7 +637,9 @@ class RASCState:
             return
         # let platform state polling the state
         next_interval = self._get_polling_interval()
-        LOGGER.debug("Next polling interval for %s: %s", self._entity.entity_id, next_interval)
+        LOGGER.debug(
+            "Next polling interval for %s: %s", self._entity.entity_id, next_interval
+        )
         await self._platform.track_entity_state(self._entity, next_interval)
         self._polls_used += 1
         await self.update()
@@ -697,7 +700,7 @@ class RASCState:
 
         if tts:
             histories[key].append_s(self.time_elapsed)
-        if ttc:
+        if ttc and self._c_detector is not None:
             if self._c_detector.is_warming:
                 histories[key].append_c(self.time_elapsed)
             else:
@@ -709,7 +712,10 @@ class RASCState:
                         Q = dist.ppf((dist.cdf(polls[cur_poll - 1]) + dist.cdf(0)) / 2)
                     else:
                         Q = dist.ppf(
-                            (dist.cdf(polls[cur_poll - 1]) + dist.cdf(polls[cur_poll - 2]))
+                            (
+                                dist.cdf(polls[cur_poll - 1])
+                                + dist.cdf(polls[cur_poll - 2])
+                            )
                             / 2
                         )
                     histories[key].append_c(Q)
@@ -757,7 +763,6 @@ class RASCState:
                     self._service_call.data,
                 )
 
-            # if not self.completed:
             await self.set_completed()
             if not self._config.get(RASC_FIXED_HISTORY):
                 self._update_store(ttc=True)
