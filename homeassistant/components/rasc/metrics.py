@@ -191,6 +191,7 @@ class ScheduleMetrics:
             self._first_arrival_time = arrival_time
 
         self._remaining_actions[routine_id] = sink_actions
+        print(f"Routine {routine_id} sink actions: {sink_actions}")
 
     def _remove_routine_remaining_action(self, action_id: str, entity_id: str) -> None:
         routine_id = get_routine_id(action_id)

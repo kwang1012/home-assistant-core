@@ -376,11 +376,11 @@ class BaseRescheduler(TimeLineScheduler):
             routine_after_src_actions = list(
                 self._current_routine_source_actions(routine_after_id, time)
             )
-            LOGGER.debug(
-                "Routine %s's current source actions: %s",
-                routine_after_id,
-                routine_after_src_actions,
-            )
+            # LOGGER.debug(
+            #     "Routine %s's current source actions: %s",
+            #     routine_after_id,
+            #     routine_after_src_actions,
+            # )
             routine_after_actions = self._bfs_actions(routine_after_src_actions)
             routine_after_target = self._target_entities(routine_after_actions)
             if routine_target.isdisjoint(routine_after_target):
@@ -708,6 +708,8 @@ class BaseRescheduler(TimeLineScheduler):
                 or child.is_end_node
             }
 
+            print(f"Action {action.action_id} complete parents: {action.parents[RASC_COMPLETE]}")
+
     def _find_slot_including_time_range(
         self,
         free_slots: Queue[datetime, datetime],
@@ -969,6 +971,7 @@ class BaseRescheduler(TimeLineScheduler):
                         break
                 if not eligible:
                     continue
+
 
                 # reinitialize the affected entities' wait queue and next slot if need be
                 target_entities = get_target_entities(self._hass, child.action)
@@ -1523,9 +1526,9 @@ class BaseRescheduler(TimeLineScheduler):
         index = 0
         while index < len(bfs_actions):
             action = bfs_actions[index]
-            if RASC_COMPLETE not in action.children:
-                index += 1
-                continue
+            # if RASC_COMPLETE not in action.children:
+            #     index += 1
+            #     continue
             for child in action.children[RASC_COMPLETE]:
                 if child.is_end_node:
                     continue
@@ -1541,7 +1544,7 @@ class BaseRescheduler(TimeLineScheduler):
         routine = routine_info.routine
         sources = []
         for action in routine.actions.values():
-            if not action.parents:
+            if not action.all_parents:
                 sources.append(action)
         return sources
 
@@ -1567,9 +1570,9 @@ class BaseRescheduler(TimeLineScheduler):
         visited = set[ActionEntity]()
 
         while next_batch:
-            LOGGER.debug(
-                "Candidates: %s, current_sources: %s", next_batch, current_sources
-            )
+            # LOGGER.debug(
+            #     "Candidates: %s, current_sources: %s", next_batch, current_sources
+            # )
             candidates = next_batch
             next_batch = set[ActionEntity]()
             for action in candidates:
@@ -1683,8 +1686,8 @@ class BaseRescheduler(TimeLineScheduler):
                             "Looking for %s's max parent end time", action.action_id
                         )
                         raise ValueError(
-                            "Action {} has not been scheduled on entity {}.".format(
-                                parent_action_id, entity_id
+                            "Action {}'s parent {} has not been scheduled on entity {}.".format(
+                                action.action_id, parent_action_id, entity_id
                             )
                         )
                     parent_lock = lock_queues[entity_id][parent_action_id]
@@ -2234,7 +2237,7 @@ class BaseRescheduler(TimeLineScheduler):
             next_actions: list[ActionEntity] = []
             routine = routine_info.routine
             for action in list(routine.actions.values())[:-1]:
-                if not action.parents:
+                if not action.all_parents:
                     next_actions.append(action)
             for action in next_actions:
                 # self._find_slot_to_move_action_up_to(action.action_id)

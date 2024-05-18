@@ -2941,7 +2941,7 @@ class RascalScheduler(BaseScheduler):
 
         # Start the action that doesn't have the parents
         for action_entity in list(routine.actions.values())[:-1]:
-            if not action_entity.parents:
+            if not action_entity.all_parents:
                 self._hass.async_create_task(self._start_action(action_entity))
 
     async def _start_action(self, action: ActionEntity) -> None:
