@@ -356,9 +356,6 @@ class BaseRescheduler(TimeLineScheduler):
                 continue
             affected_action_ids.add(child.action_id)
 
-        routine_actions = self._dependent_actions(action_id)
-        routine_target = self._target_entities(routine_actions)
-
         # the next action in the same entity's schedule is affected
         next_action_lock = self._lineage_table.lock_queues[entity_id].next(action_id)
         if next_action_lock:
@@ -370,6 +367,9 @@ class BaseRescheduler(TimeLineScheduler):
 
         # the actions in routines serialized after this action's routine are affected
         routine_id = get_routine_id(action_id)
+        # adding current action to detect all actions on the same entity as well
+        routine_actions = [action] + self._dependent_actions(action_id)
+        routine_target = self._target_entities(routine_actions)
         routines_after = self._routines_serialized_after(routine_id)
         for routine_after_id in routines_after:
             routine_after_src_actions = list(
@@ -707,10 +707,6 @@ class BaseRescheduler(TimeLineScheduler):
                 or child.is_end_node
             }
 
-            print(
-                f"Action {action.action_id} complete parents: {action.parents[RASC_COMPLETE]}"
-            )
-
     def _find_slot_including_time_range(
         self,
         free_slots: Queue[datetime, datetime],
@@ -873,17 +869,22 @@ class BaseRescheduler(TimeLineScheduler):
             # while calling self.apply_serialization_order_dependencies()
             # and these actions will be added to the wait queues later
             routine_id = get_routine_id(action.action_id)
+            same_routine_id = True
             if serializability_guarantee:
                 for parent in action.parents[RASC_COMPLETE]:
                     parent_routine_id = get_routine_id(parent.action_id)
                     if parent_routine_id != routine_id:
-                        continue
+                        same_routine_id = False
+                        break
+            if not same_routine_id:
+                continue
 
             target_entities = get_target_entities(self._hass, action.action)
             for target_entity in target_entities:
                 entity_id = get_entity_id_from_number(self._hass, target_entity)
                 if entity_id not in wait_queues:
                     wait_queues[entity_id] = list[tuple[timedelta, ActionEntity]]()
+                    heapq.heapify(wait_queues[entity_id])
                 if entity_id not in next_slots:
                     last_slot_start = self._lineage_table.free_slots[entity_id].end()[0]
                     if not last_slot_start:
@@ -2550,7 +2551,7 @@ class RascalRescheduler:
         self._apply_schedule(new_lt, new_so)
         end_time = t.time()
         self._hass.bus.async_fire(
-            "reschedule_event", {"from": start_time, "to": end_time, "diff": diff}
+            "reschedule_event", {"from": start_time, "to": end_time, "diff": diff.total_seconds()}
         )
 
     def _apply_schedule(
@@ -2606,6 +2607,7 @@ class RascalRescheduler:
 
         async def _handle_overtime(_: datetime) -> None:
             """Check if the action is about to go on overtime and adjust the schedule."""
+            LOGGER.debug("Handling overtime for %s-%s", entity_id, action_id)
             if entity_id not in self._timer_handles:
                 raise ValueError("Timer handle for entity %s is missing." % entity_id)
             saved_action_id, saved_cancel = self._timer_handles[entity_id]

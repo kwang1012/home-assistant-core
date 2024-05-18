@@ -44,15 +44,13 @@ class OverheadMeasurement:
         self._config = config
         self._start_time = time.time()
         self._reschedule_intervals: list[tuple[float, float]] = []
-        self._reschedule_diffs: list[float] = []
         self._hass.bus.async_listen("reschedule_event", self._handle_reschedule_event)
 
     def _handle_reschedule_event(self, event: Event):
         start_time = event.data["from"] - self._start_time
         end_time = event.data["to"] - self._start_time
         diff = event.data["diff"]
-        self._reschedule_diffs.append(diff)
-        self._reschedule_intervals.append((start_time, end_time))
+        self._reschedule_intervals.append((start_time, end_time, diff))
 
     def start(self) -> None:
         """Start the measurement."""
@@ -77,7 +75,6 @@ class OverheadMeasurement:
                     "cpu": self._cpu_usage,
                     "mem": self._mem_usage,
                     "reschedule": self._reschedule_intervals,
-                    "diff": self._reschedule_diffs,
                 },
                 f,
             )

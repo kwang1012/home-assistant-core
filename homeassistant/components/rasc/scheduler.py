@@ -2946,6 +2946,7 @@ class RascalScheduler(BaseScheduler):
 
     async def _start_action(self, action: ActionEntity) -> None:
         """Start the given action."""
+
         target_entities = get_target_entities(self._hass, action.action)
         if not target_entities:
             raise ValueError(f"Action {action.action_id} has no target entities.")
@@ -2957,10 +2958,13 @@ class RascalScheduler(BaseScheduler):
                     action.action_id, random_entity_id
                 )
             )
-        og_start_time = action_lock.start_time
 
         if not self._is_action_ready(action):
             await self._async_wait_until_beginning(action.action_id)
+
+        if action.start_requested:
+            _LOGGER.debug("Action %s is already started", action.action_id)
+            return
 
         action_lock = self.get_action_info(action.action_id, random_entity_id)
         if not action_lock:
@@ -2969,15 +2973,6 @@ class RascalScheduler(BaseScheduler):
                     action.action_id, random_entity_id
                 )
             )
-        new_start_time = action_lock.start_time
-        routine_id = get_routine_id(action.action_id)
-        if (
-            og_start_time != new_start_time
-            or action.start_requested
-            or routine_id not in self._serialization_order
-        ):
-            _LOGGER.debug("Action %s is already started", action.action_id)
-            return
 
         _LOGGER.info("Start the action %s", action.action_id)
         self._hass.async_create_task(action.attach_triggered(log_exceptions=False))

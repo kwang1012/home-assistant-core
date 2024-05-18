@@ -133,6 +133,7 @@ class RASCAbstraction:
             if not history:
                 return transition
             dist = get_best_distribution(history)
+            return dist.ppf(0.4)
             estimations = {
                 MEAN_ESTIMATION: dist.mean(),
                 P50_ESTIMATION: dist.ppf(0.5),
@@ -383,7 +384,7 @@ class StateDetector:
         # no history is found, polling statically
         if history is None or len(history) == 0:
             self._static = True
-            # TODO: upper bound shouldn't be None # pylint: disable=fixme
+            self._cur_poll = -1
             self._attr_upper_bound = None
             return
         self._static = False
@@ -391,9 +392,9 @@ class StateDetector:
         # only one data in history, poll exactly on that moment
         if len(history) == 1:
             self._polls = [history[0]]
-            # TODO: upper bound shouldn't be None # pylint: disable=fixme
             self._attr_upper_bound = None
             return
+
         # TODO: put this in bg # pylint: disable=fixme
         dist: rv_continuous = get_best_distribution(history)
         self._dist = dist
@@ -407,6 +408,10 @@ class StateDetector:
         LOGGER.debug("Max polls: %d", len(self._polls))
         self._last_updated: Optional[float] = None
         self._failure_callback = failure_callback
+
+    @property
+    def is_warming(self) -> bool:
+        return self._static or self._attr_upper_bound is None
 
     @property
     def dist(self) -> Any:
@@ -692,21 +697,24 @@ class RASCState:
 
         if tts:
             histories[key].append_s(self.time_elapsed)
-        if ttc and self._c_detector:
-            cur_poll = self._c_detector.cur_poll
-            polls = self._c_detector.polls
-            dist: rv_continuous = self._c_detector.dist
-            if cur_poll < len(polls):
-                if cur_poll - 2 < 0:
-                    Q = dist.ppf((dist.cdf(polls[cur_poll - 1]) + dist.cdf(0)) / 2)
-                else:
-                    Q = dist.ppf(
-                        (dist.cdf(polls[cur_poll - 1]) + dist.cdf(polls[cur_poll - 2]))
-                        / 2
-                    )
-                histories[key].append_c(Q)
-            else:
+        if ttc:
+            if self._c_detector.is_warming:
                 histories[key].append_c(self.time_elapsed)
+            else:
+                cur_poll = self._c_detector.cur_poll
+                polls = self._c_detector.polls
+                dist: rv_continuous = self._c_detector.dist
+                if cur_poll < len(polls):
+                    if cur_poll - 2 < 0:
+                        Q = dist.ppf((dist.cdf(polls[cur_poll - 1]) + dist.cdf(0)) / 2)
+                    else:
+                        Q = dist.ppf(
+                            (dist.cdf(polls[cur_poll - 1]) + dist.cdf(polls[cur_poll - 2]))
+                            / 2
+                        )
+                    histories[key].append_c(Q)
+                else:
+                    histories[key].append_c(self.time_elapsed)
 
         self.hass.loop.create_task(self._store.async_save())
 

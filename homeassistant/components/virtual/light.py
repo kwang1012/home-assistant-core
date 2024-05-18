@@ -283,22 +283,23 @@ class VirtualLight(VirtualEntity, LightEntity):
         self, brightness: int, transition: float
     ) -> None:
         """Update brightness with transition."""
+        print(f"{self.entity_id=}, _async_update_brightness")
         if self._attr_brightness is None:
             self._attr_brightness = 0
         step = (brightness - self._attr_brightness) / transition
         try:
             for _ in range(math.ceil(transition)):
                 self._attr_brightness += math.ceil(step)
-                if self._attr_brightness < 0:
+                if self._attr_brightness <= 0:
                     self._attr_brightness = 0
-                elif self._attr_brightness > brightness:
+                elif self._attr_brightness >= brightness:
                     self._attr_brightness = brightness
                 self._update_attributes()
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
-            if self._attr_brightness < 0:
+            if self._attr_brightness <= 0:
                 self._attr_brightness = 0
-            elif self._attr_brightness > brightness:
+            elif self._attr_brightness >= brightness:
                 self._attr_brightness = brightness
             self._update_attributes()
 
