@@ -349,13 +349,12 @@ class BaseRescheduler(TimeLineScheduler):
             )
         action = action_lock.action
 
-        if RASC_COMPLETE in action.children:
-            for child in action.children[RASC_COMPLETE]:
-                if child.is_end_node:
-                    continue
-                if child.action_id in affected_action_ids:
-                    continue
-                affected_action_ids.add(child.action_id)
+        for child in action.children[RASC_COMPLETE]:
+            if child.is_end_node:
+                continue
+            if child.action_id in affected_action_ids:
+                continue
+            affected_action_ids.add(child.action_id)
 
         routine_actions = self._dependent_actions(action_id)
         routine_target = self._target_entities(routine_actions)
@@ -708,7 +707,9 @@ class BaseRescheduler(TimeLineScheduler):
                 or child.is_end_node
             }
 
-            print(f"Action {action.action_id} complete parents: {action.parents[RASC_COMPLETE]}")
+            print(
+                f"Action {action.action_id} complete parents: {action.parents[RASC_COMPLETE]}"
+            )
 
     def _find_slot_including_time_range(
         self,
@@ -971,7 +972,6 @@ class BaseRescheduler(TimeLineScheduler):
                         break
                 if not eligible:
                     continue
-
 
                 # reinitialize the affected entities' wait queue and next slot if need be
                 target_entities = get_target_entities(self._hass, child.action)
@@ -1526,9 +1526,6 @@ class BaseRescheduler(TimeLineScheduler):
         index = 0
         while index < len(bfs_actions):
             action = bfs_actions[index]
-            # if RASC_COMPLETE not in action.children:
-            #     index += 1
-            #     continue
             for child in action.children[RASC_COMPLETE]:
                 if child.is_end_node:
                     continue

@@ -15,6 +15,7 @@ import psutil
 
 from homeassistant.const import (
     ACTION_LENGTH_ESTIMATION,
+    ATTR_ACTION_ID,
     ATTR_ENTITY_ID,
     ATTR_SERVICE,
     CONF_RESCHEDULING_POLICY,
@@ -99,7 +100,13 @@ def fire(
 ):
     """Fire rasc response."""
     if logger:
-        logger.info("%s %s: %s", entity_id, action, rasc_type)
+        logger.info(
+            "%s %s %s: %s",
+            entity_id,
+            action,
+            service_data.get(ATTR_ACTION_ID, ""),
+            rasc_type,
+        )
     service_data = service_data or {}
     hass.bus.async_fire(
         RASC_RESPONSE,

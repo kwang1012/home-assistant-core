@@ -191,12 +191,17 @@ class ScheduleMetrics:
             self._first_arrival_time = arrival_time
 
         self._remaining_actions[routine_id] = sink_actions
-        print(f"Routine {routine_id} sink actions: {sink_actions}")
 
     def _remove_routine_remaining_action(self, action_id: str, entity_id: str) -> None:
         routine_id = get_routine_id(action_id)
         if routine_id not in self._remaining_actions:
-            raise ValueError(f"Routine {routine_id} has not arrived.")
+            if (
+                routine_id not in self._arrival_times
+                and routine_id not in self._wait_times
+            ):
+                raise ValueError(f"Routine {routine_id} has not arrived.")
+            return
+            # raise ValueError(f"Routine {routine_id} has no remaining actions ({action_id=}, {entity_id=}).")
         if action_id not in self._remaining_actions[routine_id]:
             return
         self._remaining_actions[routine_id][action_id].remove(entity_id)
@@ -288,6 +293,10 @@ class ScheduleMetrics:
             last_action_end = None
         if last_action_end:
             self._idle_times[entity_id] += time - last_action_end
+        if entity_id == "light.front_door_light":
+            LOGGER.debug(
+                f"Action {action_id} started on entity {entity_id}\nlast_action_end: {self._last_action_end.get(entity_id, '')}, schedule_start: {self._schedule_start}, idle_time: {self._idle_times.get(entity_id, '')}"
+            )
 
         # routine start
         self._record_routine_start(action_id, time)
@@ -313,6 +322,10 @@ class ScheduleMetrics:
 
         # idle time calculation preparation
         self._last_action_end[entity_id] = time
+        if entity_id == "light.front_door_light":
+            LOGGER.debug(
+                f"Action {action_id} ended on entity {entity_id}\nlast_action_end: {self._last_action_end.get(entity_id, '')}"
+            )
 
         self._remove_routine_remaining_action(action_id, entity_id)
 
@@ -503,6 +516,12 @@ class ScheduleMetrics:
                 last_action_end = action.end_time
             if last_action_end and self._schedule_end:
                 idle_times[entity_id] += self._schedule_end - last_action_end
+        if not self._schedule_end:
+            LOGGER.warning("Schedule has not ended")
+            return idle_times
+        for entity_id, last_action_end in self._last_action_end.items():
+            if entity_id not in self._action_times:
+                idle_times[entity_id] = self._schedule_end - last_action_end
 
         return idle_times
 

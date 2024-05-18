@@ -464,6 +464,7 @@ class ActionEntity:
         action = cv.determine_script_action(self.action)
         continue_on_error = self.action.get(CONF_CONTINUE_ON_ERROR, False)
         if self.start_requested:
+            _LOGGER.warning("Action %s already started", self.action_id)
             return
         self.start_requested = True
         try:

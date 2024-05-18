@@ -694,7 +694,7 @@ class RASCState:
         if ttc and self._c_detector:
             cur_poll = self._c_detector.cur_poll
             polls = self._c_detector.polls
-            dist = self._c_detector.dist
+            dist: rv_continuous = self._c_detector.dist
             if cur_poll < len(polls):
                 if cur_poll - 2 < 0:
                     Q = dist.ppf((dist.cdf(polls[cur_poll - 1]) + dist.cdf(0)) / 2)
@@ -748,17 +748,18 @@ class RASCState:
                     self._service_call.data,
                 )
 
-            await self.set_completed()
-            if not self._config.get(RASC_FIXED_HISTORY):
-                self._update_store(ttc=True)
-            fire(
-                self.hass,
-                RASC_COMPLETE,
-                entity_id,
-                action,
-                LOGGER,
-                self._service_call.data,
-            )
+            if not self.completed:
+                await self.set_completed()
+                if not self._config.get(RASC_FIXED_HISTORY):
+                    self._update_store(ttc=True)
+                fire(
+                    self.hass,
+                    RASC_COMPLETE,
+                    entity_id,
+                    action,
+                    LOGGER,
+                    self._service_call.data,
+                )
 
             return
 
