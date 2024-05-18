@@ -14,11 +14,19 @@ from scipy.stats import rv_continuous
 
 from homeassistant.components import notify
 from homeassistant.const import (
+    ACTION_LENGTH_ESTIMATION,
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
     CONF_EVENT,
     CONF_SERVICE,
     CONF_SERVICE_DATA,
+    MEAN_ESTIMATION,
+    P50_ESTIMATION,
+    P70_ESTIMATION,
+    P80_ESTIMATION,
+    P90_ESTIMATION,
+    P95_ESTIMATION,
+    P99_ESTIMATION,
 )
 from homeassistant.core import (
     HassJobType,
@@ -28,7 +36,11 @@ from homeassistant.core import (
     ServiceResponse,
     callback,
 )
-from homeassistant.helpers.dynamic_polling import get_best_distribution, get_polls
+from homeassistant.helpers.dynamic_polling import (
+    get_best_distribution,
+    get_polls,
+    get_uniform_polls,
+)
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_component import EntityComponent
 from homeassistant.helpers.entity_platform import EntityPlatform
@@ -39,7 +51,17 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 import homeassistant.util.dt as dt_util
 
-from .const import DEFAULT_FAILURE_TIMEOUT, LOGGER, RASC_ACK, RASC_COMPLETE, RASC_START
+from .const import (
+    DEFAULT_FAILURE_TIMEOUT,
+    LOGGER,
+    RASC_ACK,
+    RASC_COMPLETE,
+    RASC_FIXED_HISTORY,
+    RASC_SLO,
+    RASC_START,
+    RASC_USE_UNIFORM,
+    RASC_WORST_Q,
+)
 from .helpers import fire
 
 _R = TypeVar("_R")
@@ -102,8 +124,8 @@ class RASCAbstraction:
             if not action:
                 raise ValueError("action must be provided.")
             if not transition:
-                transition = 0.0
-            key = ",".join((entity_id, action, str(transition)))
+                transition = 0
+            key = ",".join((entity_id, action, f"{transition:g}"))
             histories = self._store.histories
             if key not in histories:
                 histories[key] = RASCHistory()
@@ -111,6 +133,17 @@ class RASCAbstraction:
             if not history:
                 return transition
             dist = get_best_distribution(history)
+            estimations = {
+                MEAN_ESTIMATION: dist.mean(),
+                P50_ESTIMATION: dist.ppf(0.5),
+                P70_ESTIMATION: dist.ppf(0.7),
+                P80_ESTIMATION: dist.ppf(0.8),
+                P90_ESTIMATION: dist.ppf(0.9),
+                P95_ESTIMATION: dist.ppf(0.95),
+                P99_ESTIMATION: dist.ppf(0.99),
+            }
+            if self.config[ACTION_LENGTH_ESTIMATION] in estimations:
+                return estimations[self.config[ACTION_LENGTH_ESTIMATION]]
             return dist.mean()
 
         return self._get_action_length_estimate(state)
@@ -142,10 +175,12 @@ class RASCAbstraction:
             entity.async_get_action_target_state({CONF_EVENT: RASC_COMPLETE, **params})
         ) or {}
 
+        config = {
+            RASC_USE_UNIFORM: self.config.get(RASC_USE_UNIFORM),
+            RASC_FIXED_HISTORY: self.config.get(RASC_FIXED_HISTORY),
+        }
         if entity.platform_value is not None:
-            config = self.config.get(entity.platform_value)
-        else:
-            config = None
+            config.update(self.config.get(entity.platform_value) or {})
         return RASCState(
             self.hass,
             context,
@@ -274,6 +309,10 @@ class RASCAbstraction:
                         notification,
                     )
 
+    def get_history(self, key: str) -> list[float]:
+        """Return history associated with the key."""
+        return self._store.histories.get(key, RASCHistory()).ct_history
+
     async def async_load(self) -> None:
         """Load persistent store."""
         await self._store.async_load()
@@ -329,6 +368,7 @@ class StateDetector:
         complete_state: dict[str, Any] | None = None,
         worst_Q: float | None = None,
         SLO: float | None = None,
+        uniform: bool | None = None,
         failure_callback: Any = None,
     ) -> None:
         """Init State Detector."""
@@ -340,10 +380,11 @@ class StateDetector:
 
         self._worst_Q = worst_Q or 2.0
         self._slo = SLO or 0.95
+        self._is_uniform = bool(uniform)
         # no history is found, polling statically
         if history is None or len(history) == 0:
             self._static = True
-            # TODO: upper bound shouldn't be None # pylint: disable=fixme
+            self._cur_poll = -1
             self._attr_upper_bound = None
             return
         self._static = False
@@ -351,16 +392,42 @@ class StateDetector:
         # only one data in history, poll exactly on that moment
         if len(history) == 1:
             self._polls = [history[0]]
-            # TODO: upper bound shouldn't be None # pylint: disable=fixme
             self._attr_upper_bound = None
             return
+
         # TODO: put this in bg # pylint: disable=fixme
         dist: rv_continuous = get_best_distribution(history)
+        self._dist = dist
         self._attr_upper_bound = dist.ppf(0.99)
-        self._polls = get_polls(dist, worst_case_delta=self._worst_Q, SLO=self._slo)
+        if self._is_uniform:
+            self._polls = get_uniform_polls(
+                self._attr_upper_bound, worst_case_delta=self._worst_Q
+            )
+        else:
+            self._polls = get_polls(dist, worst_case_delta=self._worst_Q, SLO=self._slo)
         LOGGER.debug("Max polls: %d", len(self._polls))
         self._last_updated: Optional[float] = None
         self._failure_callback = failure_callback
+
+    @property
+    def is_warming(self) -> bool:
+        """Return true if warming up."""
+        return self._static or self._attr_upper_bound is None
+
+    @property
+    def dist(self) -> Any:
+        """Return distribution."""
+        return self._dist
+
+    @property
+    def cur_poll(self) -> int:
+        """Return current poll."""
+        return self._cur_poll
+
+    @property
+    def polls(self) -> list[float]:
+        """Return polls."""
+        return self._polls
 
     @property
     def upper_bound(self) -> float | None:
@@ -432,7 +499,7 @@ class StateDetector:
 
     def next_interval(self) -> timedelta:
         """Get next interval."""
-        if self._static:
+        if self._static or self._is_uniform:
             return timedelta(seconds=self._worst_Q)
         if self._cur_poll < len(self._polls):
             cur = self._cur_poll
@@ -495,6 +562,26 @@ class RASCState:
         self._store = store
         self._next_response = RASC_ACK
         # tracking
+        if self._service_call.service == "set_temperature" and hasattr(
+            self._entity, "current_temperature"
+        ):
+            key = ",".join(
+                (
+                    self._entity.entity_id,
+                    self._service_call.service,
+                    str(math.floor(self._entity.current_temperature)),
+                    str(math.floor(self._service_call.data["temperature"])),
+                )
+            )
+        else:
+            key = ",".join(
+                (
+                    self._entity.entity_id,
+                    self._service_call.service,
+                    f"{self._transition:g}",
+                )
+            )
+        self._key = key
         self._tracking_task: asyncio.Task[Any] | None = None
         self._s_detector: StateDetector | None = None
         self._c_detector: StateDetector | None = None
@@ -550,6 +637,9 @@ class RASCState:
             return
         # let platform state polling the state
         next_interval = self._get_polling_interval()
+        LOGGER.debug(
+            "Next polling interval for %s: %s", self._entity.entity_id, next_interval
+        )
         await self._platform.track_entity_state(self._entity, next_interval)
         self._polls_used += 1
         await self.update()
@@ -603,17 +693,34 @@ class RASCState:
             await self._c_detector.add_progress(progress)
 
     def _update_store(self, tts: bool = False, ttc: bool = False):
-        key = ",".join(
-            (self._entity.entity_id, self._service_call.service, str(self._transition))
-        )
+        key = self._key
         histories = self._store.histories
         if key not in histories:
             histories[key] = RASCHistory()
 
         if tts:
             histories[key].append_s(self.time_elapsed)
-        if ttc:
-            histories[key].append_c(self.time_elapsed)
+        if ttc and self._c_detector is not None:
+            if self._c_detector.is_warming:
+                histories[key].append_c(self.time_elapsed)
+            else:
+                cur_poll = self._c_detector.cur_poll
+                polls = self._c_detector.polls
+                dist: rv_continuous = self._c_detector.dist
+                if cur_poll < len(polls):
+                    if cur_poll - 2 < 0:
+                        Q = dist.ppf((dist.cdf(polls[cur_poll - 1]) + dist.cdf(0)) / 2)
+                    else:
+                        Q = dist.ppf(
+                            (
+                                dist.cdf(polls[cur_poll - 1])
+                                + dist.cdf(polls[cur_poll - 2])
+                            )
+                            / 2
+                        )
+                    histories[key].append_c(Q)
+                else:
+                    histories[key].append_c(self.time_elapsed)
 
         self.hass.loop.create_task(self._store.async_save())
 
@@ -645,7 +752,8 @@ class RASCState:
             # fire start response if haven't
             if not self.started:
                 await self.set_started()
-                self._update_store(tts=True)
+                if not self._config.get(RASC_FIXED_HISTORY):
+                    self._update_store(tts=True)
                 fire(
                     self.hass,
                     RASC_START,
@@ -656,7 +764,8 @@ class RASCState:
                 )
 
             await self.set_completed()
-            self._update_store(ttc=True)
+            if not self._config.get(RASC_FIXED_HISTORY):
+                self._update_store(ttc=True)
             fire(
                 self.hass,
                 RASC_COMPLETE,
@@ -668,18 +777,21 @@ class RASCState:
 
             return
 
-        start_state_matched = self._match_target_state(self._start_state)
-        if start_state_matched and not self.started:
-            fire(
-                self.hass,
-                RASC_START,
-                entity_id,
-                action,
-                LOGGER,
-                self._service_call.data,
-            )
-            await self.set_started()
-            self._update_store(tts=True)
+        # only check for start if the action hasn't start
+        if not self.started:
+            start_state_matched = self._match_target_state(self._start_state)
+            if start_state_matched and not self.started:
+                fire(
+                    self.hass,
+                    RASC_START,
+                    entity_id,
+                    action,
+                    LOGGER,
+                    self._service_call.data,
+                )
+                await self.set_started()
+                if not self._config.get(RASC_FIXED_HISTORY):
+                    self._update_store(tts=True)
 
         # update current state
         await self._update_current_state()
@@ -700,16 +812,15 @@ class RASCState:
         else:
             self._platform = platform
         # retrieve history by key
-        key = ",".join(
-            (self._entity.entity_id, self._service_call.service, str(self._transition))
-        )
+        key = self._key
         history = self._store.histories.get(key, RASCHistory())
         self._s_detector = StateDetector(history.st_history)
         self._c_detector = StateDetector(
             history.ct_history,
             self._complete_state,
-            worst_Q=self._config.get("worst_q"),
-            SLO=self._config.get("slo"),
+            worst_Q=self._config.get(RASC_WORST_Q),
+            SLO=self._config.get(RASC_SLO),
+            uniform=self._config.get(RASC_USE_UNIFORM),
             failure_callback=self.on_failure_detected,
         )
         # fire failure if exceed upper_bound

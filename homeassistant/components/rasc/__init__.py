@@ -6,9 +6,12 @@ import logging
 import os
 import shutil
 
+import numpy as np
 import voluptuous as vol
 
+from homeassistant.components.climate import SERVICE_SET_TEMPERATURE
 from homeassistant.const import (
+    ACTION_LENGTH_ESTIMATION,
     ANTICIPATORY,
     CONF_OPTIMAL_SCHEDULE_METRIC,
     CONF_RECORD_RESULTS,
@@ -18,10 +21,12 @@ from homeassistant.const import (
     CONF_ROUTINE_ARRIVAL_FILENAME,
     CONF_ROUTINE_PRIORITY_POLICY,
     CONF_SCHEDULING_POLICY,
+    DO_COMPARISON,
     DOMAIN_RASCALRESCHEDULER,
     DOMAIN_RASCALSCHEDULER,
     EARLIEST,
     EARLY_START,
+    EVENT_HOMEASSISTANT_STARTED,
     FCFS,
     FCFS_POST,
     GLOBAL_FIRST,
@@ -35,6 +40,7 @@ from homeassistant.const import (
     LONGEST,
     MAX_AVG_PARALLELISM,
     MAX_P05_PARALLELISM,
+    MEAN_ESTIMATION,
     MIN_AVG_IDLE_TIME,
     MIN_AVG_RTN_LATENCY,
     MIN_AVG_RTN_WAIT_TIME,
@@ -46,6 +52,13 @@ from homeassistant.const import (
     NONE,
     OPTIMALW,
     OPTIMALWO,
+    OVERHEAD_MEASUREMENT,
+    P50_ESTIMATION,
+    P70_ESTIMATION,
+    P80_ESTIMATION,
+    P90_ESTIMATION,
+    P95_ESTIMATION,
+    P99_ESTIMATION,
     PROACTIVE,
     REACTIVE,
     RESCHEDULE_ALL,
@@ -68,9 +81,20 @@ from .const import (
     CONF_RESULTS_DIR,
     DOMAIN,
     LOGGER,
+    RASC_ACTION,
+    RASC_ENTITY_ID,
+    RASC_EXPERIMENT_SETTING,
+    RASC_FIXED_HISTORY,
+    RASC_INTERRUPTION_MOMENT,
+    RASC_INTERRUPTION_TIME,
     RASC_SLO,
+    RASC_THERMOSTAT,
+    RASC_THERMOSTAT_START,
+    RASC_THERMOSTAT_TARGET,
+    RASC_USE_UNIFORM,
     RASC_WORST_Q,
     SUPPORTED_PLATFORMS,
+    CONF_ENABLED,
 )
 from .helpers import OverheadMeasurement
 from .rescheduler import RascalRescheduler
@@ -107,13 +131,16 @@ supported_optimal_metrics = [
 ]
 supported_routine_priority_policies = [SHORTEST, LONGEST, EARLIEST, LATEST]
 supported_rescheduling_accuracies = [RESCHEDULE_ALL, RESCHEDULE_SOME]
+supported_action_length_estimations = [MEAN_ESTIMATION, P50_ESTIMATION, P70_ESTIMATION, P80_ESTIMATION, P90_ESTIMATION, P50_ESTIMATION, P70_ESTIMATION, P80_ESTIMATION, P90_ESTIMATION, P95_ESTIMATION, P99_ESTIMATION]
 
 CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.Schema(
             {
                 vol.Optional(CONF_ENABLED, default=True): bool,
-                vol.Optional("overhead_measurement", default=False): bool,
+                vol.Optional(OVERHEAD_MEASUREMENT, default=False): bool,
+                vol.Optional(ACTION_LENGTH_ESTIMATION, default="mean"): vol.In(supported_action_length_estimations),
+                vol.Optional(DO_COMPARISON, default=True): bool,
                 vol.Optional(CONF_SCHEDULING_POLICY, default=TIMELINE): vol.In(
                     supported_scheduling_policies
                 ),
@@ -140,6 +167,12 @@ CONFIG_SCHEMA = vol.Schema(
                 ),
                 vol.Optional("mthresh", default=1.0): cv.positive_float,  # seconds
                 vol.Optional("mithresh", default=2.0): cv.positive_float,  # seconds
+                # vol.Optional(RESCHEDULING_ESTIMATION, default=True): cv.boolean,
+                # vol.Optional(RESCHEDULING_ACCURACY, default=RESCHEDULE_ALL): vol.In(
+                #     supported_rescheduling_accuracies
+                # ),
+                # vol.Optional("mthresh", default=1.0): cv.positive_float,  # seconds
+                # vol.Optional("mithresh", default=2.0): cv.positive_float,  # seconds
                 **{
                     vol.Optional(platform.value): vol.Schema(
                         {
@@ -149,13 +182,71 @@ CONFIG_SCHEMA = vol.Schema(
                     )
                     for platform in SUPPORTED_PLATFORMS
                 },
-            },
+                vol.Optional(RASC_USE_UNIFORM): cv.boolean,
+                vol.Optional(RASC_FIXED_HISTORY): cv.boolean,
+                vol.Optional(RASC_EXPERIMENT_SETTING): vol.Schema(
+                    {
+                        vol.Required(RASC_ENTITY_ID): cv.string,
+                        vol.Required(RASC_ACTION): cv.string,
+                        vol.Optional(RASC_INTERRUPTION_MOMENT): cv.positive_float,
+                        vol.Optional(RASC_THERMOSTAT): vol.Schema(
+                            {
+                                vol.Required(RASC_THERMOSTAT_START): cv.string,
+                                vol.Required(RASC_THERMOSTAT_TARGET): cv.string,
+                            }
+                        ),
+                    }
+                ),
+            }
         )
     },
     extra=vol.ALLOW_EXTRA,
 )
 
 LOGGER.level = logging.DEBUG
+
+
+def run_experiments(hass: HomeAssistant, rasc: RASCAbstraction):
+    """Run experiments."""
+
+    async def wrapper(_):
+        settings = rasc.config[RASC_EXPERIMENT_SETTING]
+        key = f"{settings[RASC_ENTITY_ID]},{settings[RASC_ACTION]}"
+        if settings[RASC_ACTION] == SERVICE_SET_TEMPERATURE:
+            if RASC_THERMOSTAT not in settings:
+                raise ValueError("Thermostat setting not found")
+            key += f",{settings[RASC_THERMOSTAT][RASC_THERMOSTAT_START]},{settings[RASC_THERMOSTAT][RASC_THERMOSTAT_TARGET]}"
+        for i, level in enumerate(range(0, 105, 5)):
+            LOGGER.debug("RUN: %d, level=%d", i + 1, level)
+            avg_complete_time = np.mean(rasc.get_history(key))
+            interruption_time = avg_complete_time * level * 0.01
+            interruption_moment = settings[RASC_INTERRUPTION_MOMENT]
+            # a_coro, s_coro, c_coro = hass.services.rasc_call("cover", "open_cover", {"entity_id": "cover.rpi_device_door"})
+            a_coro, s_coro, c_coro = hass.services.rasc_call(
+                "climate",
+                "set_temperature",
+                {"temperature": 69, "entity_id": "climate.rpi_device_thermostat"},
+                {
+                    RASC_INTERRUPTION_TIME: interruption_time,
+                    RASC_INTERRUPTION_MOMENT: interruption_moment,
+                },
+            )
+            await a_coro
+            await s_coro
+            await c_coro
+            LOGGER.debug("complete!68->69")
+            # a_coro, s_coro, c_coro = hass.services.rasc_call("cover", "close_cover", {"entity_id": "cover.rpi_device_door"})
+            a_coro, s_coro, c_coro = hass.services.rasc_call(
+                "climate",
+                "set_temperature",
+                {"temperature": 68, "entity_id": "climate.rpi_device_thermostat"},
+            )
+            await a_coro
+            await s_coro
+            await c_coro
+            LOGGER.debug("complete!69->68")
+
+    return wrapper
 
 
 def _create_result_dir() -> str:
@@ -183,7 +274,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     # cpu/memory measurement
 
-    om = OverheadMeasurement(hass.loop, config[DOMAIN])
+    om = OverheadMeasurement(hass, config[DOMAIN])
 
     hass.bus.async_listen_once("rasc_measurement_start", lambda _: om.start())
     hass.bus.async_listen_once("rasc_measurement_stop", lambda _: om.stop())
@@ -208,5 +299,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         scheduler.reschedule_handler = rescheduler.handle_event
 
     await component.async_load()
+
+    if RASC_EXPERIMENT_SETTING in config[DOMAIN]:
+        hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STARTED, run_experiments(hass, component)
+        )
 
     return True

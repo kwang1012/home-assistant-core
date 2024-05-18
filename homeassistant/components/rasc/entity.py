@@ -21,6 +21,9 @@ from homeassistant.const import (
     CONF_RESPONSE_VARIABLE,
     CONF_SERVICE,
     CONF_SERVICE_DATA,
+    RASC_ACK,
+    RASC_COMPLETE,
+    RASC_START,
 )
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import config_validation as cv, service
@@ -255,13 +258,13 @@ class RoutineEntity(BaseRoutineEntity):
         return [
             action_id
             for action_id, action in self.actions.items()
-            if not action.parents
+            if not action.all_parents
         ]
 
     @property
     def source_actions(self) -> list[ActionEntity]:
         """Get source actions."""
-        return [action for action in self.actions.values() if not action.parents]
+        return [action for action in self.actions.values() if not action.all_parents]
 
     @property
     def sink_action_ids(self) -> list[str]:
@@ -269,7 +272,7 @@ class RoutineEntity(BaseRoutineEntity):
         return [
             action_id
             for action_id, action in self.actions.items()
-            if len(action.children) == 1
+            if len(action.all_children) == 1
             and all(child.is_end_node for child in action.all_children)
         ]
 
@@ -279,7 +282,7 @@ class RoutineEntity(BaseRoutineEntity):
         return [
             action
             for action in self.actions.values()
-            if len(action.children) == 1
+            if len(action.all_children) == 1
             and all(child.is_end_node for child in action.all_children)
         ]
 
@@ -306,8 +309,16 @@ class ActionEntity:
         self.action_acked = False
         self.action_started = False
         self.action_completed = False
-        self.parents = dict[str, set[ActionEntity]]()
-        self.children = dict[str, set[ActionEntity]]()
+        self.parents: dict[str, set[ActionEntity]] = {
+            RASC_ACK: set[ActionEntity](),
+            RASC_START: set[ActionEntity](),
+            RASC_COMPLETE: set[ActionEntity](),
+        }
+        self.children: dict[str, set[ActionEntity]] = {
+            RASC_ACK: set[ActionEntity](),
+            RASC_START: set[ActionEntity](),
+            RASC_COMPLETE: set[ActionEntity](),
+        }
         self.duration = duration
         self.delay = delay
         self.variables = variables
@@ -453,6 +464,7 @@ class ActionEntity:
         action = cv.determine_script_action(self.action)
         continue_on_error = self.action.get(CONF_CONTINUE_ON_ERROR, False)
         if self.start_requested:
+            _LOGGER.warning("Action %s already started", self.action_id)
             return
         self.start_requested = True
         try:

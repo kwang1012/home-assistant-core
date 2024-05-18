@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import heapq
 from itertools import product
 import logging
+import time as t
 from typing import Optional
 
 from homeassistant.const import (
@@ -20,6 +21,7 @@ from homeassistant.const import (
     CONF_ROUTINE_PRIORITY_POLICY,
     CONF_SCHEDULING_POLICY,
     CONF_TYPE,
+    DO_COMPARISON,
     EARLIEST,
     EARLY_START,
     LATEST,
@@ -347,16 +349,12 @@ class BaseRescheduler(TimeLineScheduler):
             )
         action = action_lock.action
 
-        if RASC_COMPLETE in action.children:
-            for child in action.children[RASC_COMPLETE]:
-                if child.is_end_node:
-                    continue
-                if child.action_id in affected_action_ids:
-                    continue
-                affected_action_ids.add(child.action_id)
-
-        routine_actions = self._dependent_actions(action_id)
-        routine_target = self._target_entities(routine_actions)
+        for child in action.children[RASC_COMPLETE]:
+            if child.is_end_node:
+                continue
+            if child.action_id in affected_action_ids:
+                continue
+            affected_action_ids.add(child.action_id)
 
         # the next action in the same entity's schedule is affected
         next_action_lock = self._lineage_table.lock_queues[entity_id].next(action_id)
@@ -369,16 +367,19 @@ class BaseRescheduler(TimeLineScheduler):
 
         # the actions in routines serialized after this action's routine are affected
         routine_id = get_routine_id(action_id)
+        # adding current action to detect all actions on the same entity as well
+        routine_actions = [action] + self._dependent_actions(action_id)
+        routine_target = self._target_entities(routine_actions)
         routines_after = self._routines_serialized_after(routine_id)
         for routine_after_id in routines_after:
             routine_after_src_actions = list(
                 self._current_routine_source_actions(routine_after_id, time)
             )
-            LOGGER.debug(
-                "Routine %s's current source actions: %s",
-                routine_after_id,
-                routine_after_src_actions,
-            )
+            # LOGGER.debug(
+            #     "Routine %s's current source actions: %s",
+            #     routine_after_id,
+            #     routine_after_src_actions,
+            # )
             routine_after_actions = self._bfs_actions(routine_after_src_actions)
             routine_after_target = self._target_entities(routine_after_actions)
             if routine_target.isdisjoint(routine_after_target):
@@ -868,17 +869,22 @@ class BaseRescheduler(TimeLineScheduler):
             # while calling self.apply_serialization_order_dependencies()
             # and these actions will be added to the wait queues later
             routine_id = get_routine_id(action.action_id)
+            same_routine_id = True
             if serializability_guarantee:
                 for parent in action.parents[RASC_COMPLETE]:
                     parent_routine_id = get_routine_id(parent.action_id)
                     if parent_routine_id != routine_id:
-                        continue
+                        same_routine_id = False
+                        break
+            if not same_routine_id:
+                continue
 
             target_entities = get_target_entities(self._hass, action.action)
             for target_entity in target_entities:
                 entity_id = get_entity_id_from_number(self._hass, target_entity)
                 if entity_id not in wait_queues:
                     wait_queues[entity_id] = list[tuple[timedelta, ActionEntity]]()
+                    heapq.heapify(wait_queues[entity_id])
                 if entity_id not in next_slots:
                     last_slot_start = self._lineage_table.free_slots[entity_id].end()[0]
                     if not last_slot_start:
@@ -1521,9 +1527,6 @@ class BaseRescheduler(TimeLineScheduler):
         index = 0
         while index < len(bfs_actions):
             action = bfs_actions[index]
-            if RASC_COMPLETE not in action.children:
-                index += 1
-                continue
             for child in action.children[RASC_COMPLETE]:
                 if child.is_end_node:
                     continue
@@ -1539,7 +1542,7 @@ class BaseRescheduler(TimeLineScheduler):
         routine = routine_info.routine
         sources = []
         for action in routine.actions.values():
-            if not action.parents:
+            if not action.all_parents:
                 sources.append(action)
         return sources
 
@@ -1565,9 +1568,9 @@ class BaseRescheduler(TimeLineScheduler):
         visited = set[ActionEntity]()
 
         while next_batch:
-            LOGGER.debug(
-                "Candidates: %s, current_sources: %s", next_batch, current_sources
-            )
+            # LOGGER.debug(
+            #     "Candidates: %s, current_sources: %s", next_batch, current_sources
+            # )
             candidates = next_batch
             next_batch = set[ActionEntity]()
             for action in candidates:
@@ -1681,8 +1684,8 @@ class BaseRescheduler(TimeLineScheduler):
                             "Looking for %s's max parent end time", action.action_id
                         )
                         raise ValueError(
-                            "Action {} has not been scheduled on entity {}.".format(
-                                parent_action_id, entity_id
+                            "Action {}'s parent {} has not been scheduled on entity {}.".format(
+                                action.action_id, parent_action_id, entity_id
                             )
                         )
                     parent_lock = lock_queues[entity_id][parent_action_id]
@@ -2232,7 +2235,7 @@ class BaseRescheduler(TimeLineScheduler):
             next_actions: list[ActionEntity] = []
             routine = routine_info.routine
             for action in list(routine.actions.values())[:-1]:
-                if not action.parents:
+                if not action.all_parents:
                     next_actions.append(action)
             for action in next_actions:
                 # self._find_slot_to_move_action_up_to(action.action_id)
@@ -2297,6 +2300,7 @@ class RascalRescheduler:
         # self._estimation: bool = config[RESCHEDULING_ESTIMATION]
         # self._resched_accuracy: str = config[RESCHEDULING_ACCURACY]
         self._scheduling_policy: str = config[CONF_SCHEDULING_POLICY]
+        self._do_comparision: bool = config[DO_COMPARISON]
         self._rescheduler = BaseRescheduler(
             self._hass,
             scheduler.lineage_table,
@@ -2385,6 +2389,7 @@ class RascalRescheduler:
         self, entity_id: str, action_id: str, diff: timedelta
     ) -> None:
         """Reschedule the entities based on the rescheduling policy."""
+        start_time = t.time()
         # Save the old schedule
         old_lt = self._scheduler.lineage_table.duplicate
         old_so = self._scheduler.duplicate_serialization_order
@@ -2491,29 +2496,30 @@ class RascalRescheduler:
             else:
                 descheduled_source_action_ids = affected_source_action_ids
             if self._resched_policy in (SJFWO, SJFW):
-                # compare to optimal
-                self._rescheduler.optimal(
-                    descheduled_source_action_ids,
-                    descheduled_actions,
-                    affected_entities,
-                    serializability,
-                    immutable_serialization_order,
-                    metrics,
-                )
-                self._apply_schedule(old_lt, old_so)
-
-                # compare to RV
-                if self._resched_policy in (SJFW):
-                    success = await self._move_device_schedules(old_end_time, diff)
-                    if not success:
-                        raise ValueError("Failed to move device schedules.")
-                    self._rescheduler.RV(new_end_time, metrics)
+                if self._do_comparision:
+                    # compare to optimal
+                    self._rescheduler.optimal(
+                        descheduled_source_action_ids,
+                        descheduled_actions,
+                        affected_entities,
+                        serializability,
+                        immutable_serialization_order if serializability else None,
+                        metrics,
+                    )
                     self._apply_schedule(old_lt, old_so)
 
-                # output_lock_queues(old_lt.lock_queues)
-                self._rescheduler.deschedule_affected_and_later_actions(
-                    affected_source_action_ids
-                )
+                    # compare to RV
+                    if self._resched_policy in (SJFW):
+                        success = await self._move_device_schedules(old_end_time, diff)
+                        if not success:
+                            raise ValueError("Failed to move device schedules.")
+                        self._rescheduler.RV(new_end_time, metrics)
+                        self._apply_schedule(old_lt, old_so)
+
+                    # output_lock_queues(old_lt.lock_queues)
+                    self._rescheduler.deschedule_affected_and_later_actions(
+                        affected_source_action_ids
+                    )
 
                 new_lt, new_so = self._rescheduler.sjf(
                     descheduled_source_action_ids,
@@ -2543,6 +2549,10 @@ class RascalRescheduler:
             serialization_order=new_so,
         )
         self._apply_schedule(new_lt, new_so)
+        end_time = t.time()
+        self._hass.bus.async_fire(
+            "reschedule_event", {"from": start_time, "to": end_time, "diff": diff.total_seconds()}
+        )
 
     def _apply_schedule(
         self,
@@ -2597,6 +2607,7 @@ class RascalRescheduler:
 
         async def _handle_overtime(_: datetime) -> None:
             """Check if the action is about to go on overtime and adjust the schedule."""
+            LOGGER.debug("Handling overtime for %s-%s", entity_id, action_id)
             if entity_id not in self._timer_handles:
                 raise ValueError("Timer handle for entity %s is missing." % entity_id)
             saved_action_id, saved_cancel = self._timer_handles[entity_id]

@@ -195,7 +195,13 @@ class ScheduleMetrics:
     def _remove_routine_remaining_action(self, action_id: str, entity_id: str) -> None:
         routine_id = get_routine_id(action_id)
         if routine_id not in self._remaining_actions:
-            raise ValueError(f"Routine {routine_id} has not arrived.")
+            if (
+                routine_id not in self._arrival_times
+                and routine_id not in self._wait_times
+            ):
+                raise ValueError(f"Routine {routine_id} has not arrived.")
+            return
+            # raise ValueError(f"Routine {routine_id} has no remaining actions ({action_id=}, {entity_id=}).")
         if action_id not in self._remaining_actions[routine_id]:
             return
         self._remaining_actions[routine_id][action_id].remove(entity_id)
@@ -502,6 +508,12 @@ class ScheduleMetrics:
                 last_action_end = action.end_time
             if last_action_end and self._schedule_end:
                 idle_times[entity_id] += self._schedule_end - last_action_end
+        if not self._schedule_end:
+            LOGGER.warning("Schedule has not ended")
+            return idle_times
+        for entity_id, last_action_end in self._last_action_end.items():
+            if entity_id not in self._action_times:
+                idle_times[entity_id] = self._schedule_end - last_action_end
 
         return idle_times
 

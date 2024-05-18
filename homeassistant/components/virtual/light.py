@@ -166,6 +166,8 @@ class VirtualLight(VirtualEntity, LightEntity):
         if config.get(CONF_SUPPORT_TRANSITION):
             self._attr_supported_features |= LightEntityFeature.TRANSITION
 
+        self._task: asyncio.Task = None
+
     def _create_state(self, config):
         super()._create_state(config)
 
@@ -252,9 +254,12 @@ class VirtualLight(VirtualEntity, LightEntity):
         if brightness is not None:
             if (
                 transition is not None
+                and transition > 0
                 and self._attr_supported_features & LightEntityFeature.TRANSITION
             ):
-                self.hass.async_create_task(
+                if self._task is not None:
+                    self._task.cancel()
+                self._task = self.hass.async_create_task(
                     self._async_update_brightness(brightness, transition)
                 )
             else:
@@ -288,17 +293,21 @@ class VirtualLight(VirtualEntity, LightEntity):
         step = (brightness - self._attr_brightness) / transition
         try:
             for _ in range(math.ceil(transition)):
-                self._attr_brightness += math.ceil(step)
-                if self._attr_brightness < 0:
+                self._attr_brightness += (
+                    -math.ceil(abs(step)) if step < 0 else math.ceil(step)
+                )
+                if self._attr_brightness <= 0:
                     self._attr_brightness = 0
-                elif self._attr_brightness > brightness:
+                    break
+                if self._attr_brightness >= brightness:
                     self._attr_brightness = brightness
+                    break
                 self._update_attributes()
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
-            if self._attr_brightness < 0:
+            if self._attr_brightness <= 0:
                 self._attr_brightness = 0
-            elif self._attr_brightness > brightness:
+            elif self._attr_brightness >= brightness:
                 self._attr_brightness = brightness
             self._update_attributes()
 

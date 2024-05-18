@@ -64,9 +64,19 @@ class RaspberryPiThermostat(RaspberryPiDevice):
         thermostat_state = self.thermostat_state
         return thermostat_state.get("preset_mode")
 
-    async def set_temperature(self, temperature: float) -> None:
+    async def reset(self, temperature: float | None = None):
+        """Reset thermostat."""
+        _state = {"reset": temperature}
+
+        themostat_state = await self._query_helper(
+            self.THERMOSTAT_SERVICE, self.SET_THERMOSTAT_METHOD, _state
+        )
+
+        return themostat_state
+
+    async def set_temperature(self, temperature: float, **kwargs: Any) -> None:
         """Set new target temperature."""
-        _state = {"temperature": temperature}
+        _state = {"temperature": temperature, **kwargs}
 
         themostat_state = await self._query_helper(
             self.THERMOSTAT_SERVICE, self.SET_THERMOSTAT_METHOD, _state
