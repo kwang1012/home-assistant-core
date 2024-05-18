@@ -145,6 +145,9 @@ class RASCAbstraction:
             if self.config[ACTION_LENGTH_ESTIMATION] in estimations:
                 return estimations[self.config[ACTION_LENGTH_ESTIMATION]]
 
+        if not state:
+            return 0.0
+
         return self._get_action_length_estimate(state)
 
     def _init_states(self, context: Context, service_call: ServiceCall):
@@ -388,15 +391,15 @@ class StateDetector:
             return
         self._static = False
         self._cur_poll = 0
+        # TODO: put this in bg # pylint: disable=fixme
+        dist: rv_continuous = get_best_distribution(history)
+        self._dist = dist
         # only one data in history, poll exactly on that moment
         if len(history) == 1:
             self._polls = [history[0]]
             # TODO: upper bound shouldn't be None # pylint: disable=fixme
             self._attr_upper_bound = None
             return
-        # TODO: put this in bg # pylint: disable=fixme
-        dist: rv_continuous = get_best_distribution(history)
-        self._dist = dist
         self._attr_upper_bound = dist.ppf(0.99)
         if self._is_uniform:
             self._polls = get_uniform_polls(
