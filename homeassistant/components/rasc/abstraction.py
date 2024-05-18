@@ -106,8 +106,8 @@ class RASCAbstraction:
             for entity in entities:
                 self._states[entity.entity_id].start_tracking(platform)
 
-    def _get_action_length_estimate(self, state: RASCState) -> float:
-        if not state.start_time:
+    def _get_action_length_estimate(self, state: RASCState | None) -> float:
+        if not state or not state.start_time:
             raise ValueError("start_time must be provided.")
         return state.compl_time_estimation - state.start_time
 
@@ -144,9 +144,6 @@ class RASCAbstraction:
             }
             if self.config[ACTION_LENGTH_ESTIMATION] in estimations:
                 return estimations[self.config[ACTION_LENGTH_ESTIMATION]]
-
-        if not state:
-            return 0.0
 
         return self._get_action_length_estimate(state)
 
