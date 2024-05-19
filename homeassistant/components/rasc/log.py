@@ -40,13 +40,13 @@ def set_log_dir() -> str:
 LOG_PATH = set_log_dir()
 
 
-def set_logger() -> logging.Logger:
+def set_logger(filename: str = "rascal.log") -> logging.Logger:
     """Set logger."""
     logger = logging.getLogger("rascal_logger")
     logger.setLevel(logging.DEBUG)
     log_format = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    filename = os.path.join(LOG_PATH, "rascal.log")
-    log_handler = logging.FileHandler(filename, mode="w")
+    pathname = os.path.join(LOG_PATH, filename)
+    log_handler = logging.FileHandler(pathname, mode="w")
     log_handler.setLevel(logging.DEBUG)
     log_handler.setFormatter(log_format)
     logger.addHandler(log_handler)

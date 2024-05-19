@@ -64,6 +64,7 @@ from homeassistant.helpers.typing import ConfigType
 from .abstraction import RASCAbstraction
 from .const import DOMAIN, MIN_RESCHEDULE_TIME, RASC_ACK
 from .entity import ActionEntity, Queue, get_entity_id_from_number
+from .log import set_logger
 from .metrics import ScheduleMetrics
 from .scheduler import (
     ActionInfo,
@@ -75,8 +76,7 @@ from .scheduler import (
     output_all,
 )
 
-LOGGER = logging.getLogger("rascal_rescheduler")
-LOGGER.setLevel(logging.DEBUG)
+LOGGER = set_logger("rescheduler.log")
 
 
 class BaseRescheduler(TimeLineScheduler):
@@ -357,13 +357,14 @@ class BaseRescheduler(TimeLineScheduler):
             affected_action_ids.add(child.action_id)
 
         # the next action in the same entity's schedule is affected
-        next_action_lock = self._lineage_table.lock_queues[entity_id].next(action_id)
-        if next_action_lock:
+        temp_action_id = action_id
+        while next_action_lock := self._lineage_table.lock_queues[entity_id].next(temp_action_id):
             next_action = next_action_lock.action
             if next_action.action_id not in affected_action_ids and get_routine_id(
                 next_action.action_id
             ) != get_routine_id(action_id):
                 affected_action_ids.add(next_action.action_id)
+            temp_action_id = next_action.action_id
 
         # the actions in routines serialized after this action's routine are affected
         routine_id = get_routine_id(action_id)
@@ -371,15 +372,16 @@ class BaseRescheduler(TimeLineScheduler):
         routine_actions = [action] + self._dependent_actions(action_id)
         routine_target = self._target_entities(routine_actions)
         routines_after = self._routines_serialized_after(routine_id)
+        LOGGER.debug("Routines serialized after %s: %s", routine_id, routines_after)
         for routine_after_id in routines_after:
             routine_after_src_actions = list(
                 self._current_routine_source_actions(routine_after_id, time)
             )
-            # LOGGER.debug(
-            #     "Routine %s's current source actions: %s",
-            #     routine_after_id,
-            #     routine_after_src_actions,
-            # )
+            LOGGER.debug(
+                "Routine %s's current source actions: %s",
+                routine_after_id,
+                routine_after_src_actions,
+            )
             routine_after_actions = self._bfs_actions(routine_after_src_actions)
             routine_after_target = self._target_entities(routine_after_actions)
             if routine_target.isdisjoint(routine_after_target):
@@ -529,9 +531,12 @@ class BaseRescheduler(TimeLineScheduler):
                             action_id, entity_id
                         )
                     )
+                start = datetime_to_string(action_lock.start_time) if action_lock else None
+                free = datetime_to_string(free_st_time) if free_st_time else None
+                LOGGER.debug(f"{action_id=}, start={start}, free={free}")
                 if not free_st_time:
                     # while a source action is not found, skip the action
-                    if action_lock.action.action_id not in affected_action_ids:
+                    if action_id not in affected_action_ids:
                         continue
                     # record the first action's start time
                     # to create a free slot later
@@ -540,6 +545,11 @@ class BaseRescheduler(TimeLineScheduler):
                 # chronological order, add every action to the descheduled actions
                 # (including the found source action)
                 actions_to_remove.append(action_id)
+                LOGGER.debug(f"{actions_to_remove=}")
+
+            if not actions_to_remove:
+                LOGGER.debug("Action %s not scheduled on %s", action_id, entity_id)
+                output_all(LOGGER, lock_queues=self._lineage_table.lock_queues)
 
             # remove the actions from the lock queue
             for action_id in actions_to_remove:
@@ -586,6 +596,7 @@ class BaseRescheduler(TimeLineScheduler):
         entity_descheduled_actions = dict[str, dict[str, list[ActionEntity]]]()
         for routine_id in immutable_order:
             routine_bfs = self._routine_actions_bfs(routine_id)
+            LOGGER.debug(f"{routine_id=}, {routine_bfs=}")
             for action in routine_bfs:
                 if action.action_id not in descheduled_actions:
                     continue
@@ -600,8 +611,9 @@ class BaseRescheduler(TimeLineScheduler):
                         entity_descheduled_actions[entity_id][routine_id] = []
                     descheduled_action = descheduled_actions[action.action_id]
                     entity_descheduled_actions[entity_id][routine_id].append(
-                        descheduled_action
+                        descheduled_action.duplicate
                     )
+        LOGGER.debug(f"{entity_descheduled_actions=}")
 
         actions_with_dependencies = dict[str, ActionEntity]()
         for routine_actions in entity_descheduled_actions.values():
@@ -610,13 +622,15 @@ class BaseRescheduler(TimeLineScheduler):
                 if not actions:
                     continue
                 if prev_routine_id:
-                    # add dependencies to all the actions
+                    # add RASC_COMPLETE dependencies to all the actions
                     # of the previous routine on the same entity
                     # this way, each action in a routine
                     # may have dependencies to multiple different routines
                     for pre_action, action in product(
                         routine_actions[prev_routine_id], actions
                     ):
+                        if pre_action.action_id == action.action_id:
+                            continue
                         if action not in pre_action.children[RASC_COMPLETE]:
                             pre_action.children[RASC_COMPLETE].add(action)
                         if pre_action not in action.parents[RASC_COMPLETE]:
@@ -626,6 +640,7 @@ class BaseRescheduler(TimeLineScheduler):
                     if action.action_id not in actions_with_dependencies:
                         actions_with_dependencies[action.action_id] = action
                 prev_routine_id = routine_id
+
         return actions_with_dependencies
 
     def adjust_descheduled_source_actions(
@@ -896,6 +911,8 @@ class BaseRescheduler(TimeLineScheduler):
                 )
 
         visited = set[ActionEntity]()
+
+        LOGGER.debug(f"{descheduled_actions=}")
         while descheduled_actions:
             # filter out entities with no actions to schedule
             filtered_next_slots = {
@@ -914,7 +931,8 @@ class BaseRescheduler(TimeLineScheduler):
             )
 
             # find the action with the shortest duration
-            self._output_wait_queues(wait_queues)
+            if 'light.front_door_light' in wait_queues:
+                LOGGER.debug(f"{wait_queues['light.front_door_light']=}")
             shortest_action = heapq.heappop(wait_queues[next_entity_id])[1]
             if shortest_action in visited:
                 if not wait_queues[next_entity_id]:
@@ -956,6 +974,11 @@ class BaseRescheduler(TimeLineScheduler):
                 if child.is_end_node:
                     continue
 
+                if shortest_action.action_id.startswith("1715721247625") and shortest_action.action_id.endswith(".8"):
+                    if child.action_id.endswith(".11"):
+                        LOGGER.debug(f"hello\n{child.all_parents=}\n{self._lineage_table.lock_queues[next_entity_id]=}")
+
+                LOGGER.debug(f"{child.action_id}'s parents: {child.all_parents}")
                 # eligible children are those whose parents are all scheduled
                 eligible = True
                 for parent in child.all_parents:
@@ -969,9 +992,21 @@ class BaseRescheduler(TimeLineScheduler):
                         not in self._lineage_table.lock_queues[parent_entity_id]
                         for parent_entity_id in entity_ids
                     ):
+                        parents_ready = {
+                            parent.action_id: parent.action_id in self._lineage_table.lock_queues[parent_entity_id]
+                            for parent_entity_id in entity_ids
+                        }
+                        LOGGER.debug(f"{parents_ready=}")
+                        parents_waiting = {
+                            parent.action_id: parent.action_id in wait_queues[parent_entity_id]
+                            if parent_entity_id in wait_queues else False
+                            for parent_entity_id in entity_ids
+                        }
+                        LOGGER.debug(f"{parents_waiting=}")
                         eligible = False
                         break
                 if not eligible:
+                    LOGGER.debug(f"{child.action_id} not eligible for wait queues")
                     continue
 
                 # reinitialize the affected entities' wait queue and next slot if need be
@@ -983,6 +1018,7 @@ class BaseRescheduler(TimeLineScheduler):
                     heapq.heappush(
                         wait_queues[entity_id], (child.duration[entity_id], child)
                     )
+                    LOGGER.debug(f"Added {child.action_id} to {entity_id}'s wait queue")
 
                     if entity_id not in next_slots:
                         last_slot_start = self._lineage_table.free_slots[
@@ -1585,6 +1621,11 @@ class BaseRescheduler(TimeLineScheduler):
                 scheduled = True
                 for target_entity in target_entities:
                     entity_id = get_entity_id_from_number(self._hass, target_entity)
+                    if entity_id not in self._lineage_table.lock_queues:
+                        raise ValueError("Entity %s has no schedule." % entity_id)
+                    # if action.action_id not in self._lineage_table.lock_queues[entity_id]:
+                    #     LOGGER.debug(f"Routine {routine_id} has completed its execution, moving on")
+                    #     return set()
                     action_lock = self.get_action_info(action.action_id, entity_id)
                     if not action_lock:
                         raise ValueError(
@@ -2272,7 +2313,7 @@ class RascalRescheduler:
         _reschedacc (str): Flag indicating if rescheduling accuracy is enabled.
         _scheduling_policy (str): The scheduling policy.
         _rescheduler (BaseRescheduler): The rescheduler instance.
-        _timer_handles (dict[str, tuple[Optional[str], Optional[Callable[[], None]]]): Overtime timers
+        _timer_handles (dict[str, Optional[Callable[[], None]]): Overtime timers
         _record_results (bool): Flag indicating if results are recorded.
         _result_dir (str): The directory to store the results.
         _mthresh (float): The M threshold.
@@ -2310,7 +2351,7 @@ class RascalRescheduler:
             self._routine_priority,
         )
         self._timer_handles: dict[
-            str, tuple[Optional[str], Optional[Callable[[], None]]]
+            str, Optional[Callable[[], None]]
         ] = {
             entity_id: (None, None)
             for entity_id in scheduler._lineage_table.lock_queues
@@ -2608,16 +2649,10 @@ class RascalRescheduler:
         async def _handle_overtime(_: datetime) -> None:
             """Check if the action is about to go on overtime and adjust the schedule."""
             LOGGER.debug("Handling overtime for %s-%s", entity_id, action_id)
-            if entity_id not in self._timer_handles:
-                raise ValueError("Timer handle for entity %s is missing." % entity_id)
-            saved_action_id, saved_cancel = self._timer_handles[entity_id]
-            if saved_action_id != action_id:
-                raise ValueError(
-                    "Action ID mismatch for entity {} in the timer handle. saved: {}, new: {}".format(
-                        entity_id, saved_action_id, action_id
-                    )
-                )
-            self._timer_handles[entity_id] = None, None
+            if action_id not in self._timer_handles:
+                raise ValueError("Timer handle for %s is missing." % action_id)
+            saved_cancel = self._timer_handles[action_id]
+            self._timer_handles[action_id] = None
 
             extra = 0.0
             if self._resched_trigger in (ANTICIPATORY):
@@ -2635,17 +2670,17 @@ class RascalRescheduler:
             await self._reschedule(entity_id, action_id, extra_dt)
 
         cancel = async_call_later(self._hass, timer_delay, _handle_overtime)
-        self._timer_handles[entity_id] = (action_id, cancel)
+        self._timer_handles[action_id] = cancel
 
     def _cancel_overtime_check(self, event: Event) -> None:
         """Cancel the timer for the rescheduler."""
         entity_id = str(event.data.get(ATTR_ENTITY_ID))
         action_id = str(event.data.get(ATTR_ACTION_ID))
-        if entity_id in self._timer_handles:
-            saved_action_id, saved_cancel = self._timer_handles[entity_id]
-            if (not action_id or saved_action_id == action_id) and saved_cancel:
+        if action_id in self._timer_handles:
+            saved_cancel = self._timer_handles[action_id]
+            if saved_cancel:
                 saved_cancel()
-                self._timer_handles[entity_id] = None, None
+                self._timer_handles[action_id] = None
         LOGGER.debug("Canceled overtime check for %s-%s", entity_id, action_id)
 
     def _action_length_diff(self, event: Event) -> timedelta:

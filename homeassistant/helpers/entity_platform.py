@@ -904,7 +904,6 @@ class EntityPlatform:
             )
             return
 
-        print("platform Entity id: ", entity.entity_id)
         async with self._process_updates:
             if entity.should_poll and entity.hass:
                 await entity.async_update_ha_state(True)

@@ -2963,10 +2963,17 @@ class RascalScheduler(BaseScheduler):
             await self._async_wait_until_beginning(action.action_id)
 
         if action.start_requested:
-            _LOGGER.debug("Action %s is already started", action.action_id)
+            _LOGGER.debug("Action %s has already started", action.action_id)
             return
 
-        action_lock = self.get_action_info(action.action_id, random_entity_id)
+        if random_entity_id not in self._lineage_table.lock_queues:
+            raise ValueError("Entity %s has no schedule." % random_entity_id)
+        lock_queue = self.lineage_table.lock_queues[random_entity_id]
+        if action.action_id not in lock_queue:
+            _LOGGER.debug("Action %s's routine has already completed", action.action_id)
+            return
+
+        action_lock = lock_queue[action.action_id]
         if not action_lock:
             raise ValueError(
                 "Action {}'s schedule information on entity {} is missing.".format(

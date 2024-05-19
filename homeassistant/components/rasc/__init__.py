@@ -94,7 +94,6 @@ from .const import (
     RASC_USE_UNIFORM,
     RASC_WORST_Q,
     SUPPORTED_PLATFORMS,
-    CONF_ENABLED,
 )
 from .helpers import OverheadMeasurement
 from .rescheduler import RascalRescheduler
@@ -131,7 +130,15 @@ supported_optimal_metrics = [
 ]
 supported_routine_priority_policies = [SHORTEST, LONGEST, EARLIEST, LATEST]
 supported_rescheduling_accuracies = [RESCHEDULE_ALL, RESCHEDULE_SOME]
-supported_action_length_estimations = [MEAN_ESTIMATION, P50_ESTIMATION, P70_ESTIMATION, P80_ESTIMATION, P90_ESTIMATION, P50_ESTIMATION, P70_ESTIMATION, P80_ESTIMATION, P90_ESTIMATION, P95_ESTIMATION, P99_ESTIMATION]
+supported_action_length_estimations = [
+    MEAN_ESTIMATION,
+    P50_ESTIMATION,
+    P70_ESTIMATION,
+    P80_ESTIMATION,
+    P90_ESTIMATION,
+    P95_ESTIMATION,
+    P99_ESTIMATION
+]
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -139,7 +146,9 @@ CONFIG_SCHEMA = vol.Schema(
             {
                 vol.Optional(CONF_ENABLED, default=True): bool,
                 vol.Optional(OVERHEAD_MEASUREMENT, default=False): bool,
-                vol.Optional(ACTION_LENGTH_ESTIMATION, default="mean"): vol.In(supported_action_length_estimations),
+                vol.Optional(ACTION_LENGTH_ESTIMATION, default="mean"): vol.In(
+                    supported_action_length_estimations
+                ),
                 vol.Optional(DO_COMPARISON, default=True): bool,
                 vol.Optional(CONF_SCHEDULING_POLICY, default=TIMELINE): vol.In(
                     supported_scheduling_policies
