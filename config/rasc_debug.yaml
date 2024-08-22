@@ -9,7 +9,7 @@ optimal_schedule_metric: "min_avg_rtn_latency"
 rescheduling_window: 30
 routine_priority_policy: "earliest" # from shortest, longest, earliest, latest
 record_results: true
-routine_arrival_filename: "arrival_afternoon.csv"
+routine_arrival_filename: "arrival_debug.csv"
 overhead_measurement: true
 do_comparison: false
 # rescheduling_estimation: true

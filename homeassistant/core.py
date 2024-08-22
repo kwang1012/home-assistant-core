@@ -883,6 +883,11 @@ class HomeAssistant:
         for task in self._tasks:
             _LOGGER.warning("Shutdown stage %s: still running: %s", stage, task)
 
+    def async_log_running_tasks(self) -> None:
+        """Log all running tasks."""
+        for task in self._tasks:
+            _LOGGER.warning("Running task: %s", task)
+
 
 class Context:
     """The context that triggered something."""

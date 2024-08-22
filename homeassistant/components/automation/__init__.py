@@ -264,7 +264,7 @@ def trigger_automations_later(
         return
 
     automations = list(component.entities)
-    arrival_time = 10.0
+    arrival_time = 0.0
     routine_arrivals = dict[str, list[float]]()
     routine_aliases = dict[str, str]()
     with open(routine_arrival_pathname, encoding="utf-8") as f:
@@ -713,11 +713,11 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
         """
 
         self._logger.info(
-            "Trigger automation %s:\nrun variables: %s, context: %s, skip_condition: %s",
+            "Trigger automation %s",  #:\nrun variables: %s, context: %s, skip_condition: %s",
             self.unique_id,
-            run_variables,
-            context,
-            skip_condition,
+            # run_variables,
+            # context,
+            # skip_condition,
         )
 
         reason = ""

@@ -683,7 +683,8 @@ class ScheduleMetrics:
             filename = "schedule_metrics"
         else:
             filename = f"{self._rescheduling_policy}_metrics_{self._version}"
-        LOGGER.debug("Saving schedule metrics to file %s\n%s", filename, self)
+        LOGGER.debug("Saving schedule metrics to file %s", filename)
+        # LOGGER.debug("Saving schedule metrics to file %s\n%s", filename, self)
         with open(f"{self._result_dir}/{filename}.yaml", "w", encoding="utf-8") as f:
             f.write(f"Schedule Length: {self.schedule_length.total_seconds()}\n")
             f.write(f"Average Wait Time: {self.avg_wait_time.total_seconds()}\n")

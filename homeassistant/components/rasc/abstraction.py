@@ -53,7 +53,6 @@ import homeassistant.util.dt as dt_util
 
 from .const import (
     DEFAULT_FAILURE_TIMEOUT,
-    LOGGER,
     RASC_ACK,
     RASC_COMPLETE,
     RASC_FIXED_HISTORY,
@@ -63,8 +62,10 @@ from .const import (
     RASC_WORST_Q,
 )
 from .helpers import fire
+from .log import set_logger
 
 _R = TypeVar("_R")
+LOGGER = set_logger("abstraction")
 
 
 class RASCAbstraction:
@@ -108,7 +109,10 @@ class RASCAbstraction:
 
     def _get_action_length_estimate(self, state: RASCState) -> float:
         if not state.start_time:
-            raise ValueError("start_time must be provided.")
+            LOGGER.error(
+                "Start_time must be provided for %s: %s", state.entity.entity_id, state
+            )
+            return 0
         return state.compl_time_estimation - state.start_time
 
     def get_action_length_estimate(
@@ -404,7 +408,14 @@ class StateDetector:
                 self._attr_upper_bound, worst_case_delta=self._worst_Q
             )
         else:
-            self._polls = get_polls(dist, worst_case_delta=self._worst_Q, SLO=self._slo)
+            try:
+                self._polls = get_polls(
+                    dist, worst_case_delta=self._worst_Q, SLO=self._slo
+                )
+            except RecursionError:
+                self._polls = get_uniform_polls(
+                    self._attr_upper_bound, worst_case_delta=self._worst_Q
+                )
         LOGGER.debug("Max polls: %d", len(self._polls))
         self._last_updated: Optional[float] = None
         self._failure_callback = failure_callback
@@ -593,6 +604,10 @@ class RASCState:
         # experiments
         self._polls_used = 0
 
+    def __repr__(self) -> str:
+        """Return string representation."""
+        return f"RASCState({self._entity.entity_id}, {self._service_call.data})"
+
     @property
     def time_elapsed(self) -> float:
         """Return the elapsed time since started."""
@@ -637,9 +652,9 @@ class RASCState:
             return
         # let platform state polling the state
         next_interval = self._get_polling_interval()
-        LOGGER.debug(
-            "Next polling interval for %s: %s", self._entity.entity_id, next_interval
-        )
+        # LOGGER.debug(
+        #     "Next polling interval for %s: %s", self._entity.entity_id, next_interval
+        # )
         await self._platform.track_entity_state(self._entity, next_interval)
         self._polls_used += 1
         await self.update()

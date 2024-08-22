@@ -35,12 +35,13 @@ from homeassistant.helpers.rascalscheduler import (
 from homeassistant.util import slugify
 
 from .const import CONF_TRANSITION
+from .log import set_logger
 
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
 _T = TypeVar("_T")
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = set_logger("entity")
 _LOG_EXCEPTION = logging.ERROR + 1
 
 TIMEOUT = 3000  # millisecond
@@ -419,6 +420,7 @@ class ActionEntity:
         ancestors = self.all_parents.copy()
         while ancestors:
             ancestor = ancestors.pop()
+            # _LOGGER.debug(f"is {self.action_id} a descendant of {ancestor.action_id}? {ancestor.action_id == action_id}")
             if ancestor.action_id == action_id:
                 return True
             ancestors.update(ancestor.all_parents)
@@ -470,11 +472,13 @@ class ActionEntity:
         try:
             handler = f"_async_{action}_step"
             await getattr(self, handler)()
+            _LOGGER.info("Action %s completed on attach_triggered", self.action_id)
 
         except Exception as ex:  # pylint: disable=broad-except
             self._handle_exception(
                 ex, continue_on_error, self._log_exceptions or log_exceptions
             )
+            _LOGGER.warning("Action %s failed on attach_triggered", self.action_id)
 
     async def _async_device_step(self) -> None:
         """Execute device automation."""
