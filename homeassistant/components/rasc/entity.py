@@ -91,7 +91,8 @@ class BaseRoutineEntity:
                     hass=entity.hass,
                     action=entity.action,
                     action_id=new_action_id,
-                    duration=entity.duration,
+                    rts=entity.rts,
+                    stc=entity.stc,
                     delay=entity.delay,
                     variables=var,
                     context=ctx,
@@ -103,7 +104,8 @@ class BaseRoutineEntity:
                     hass=entity.hass,
                     action={},
                     action_id="",
-                    duration=entity.duration,
+                    rts=entity.rts,
+                    stc=entity.stc,
                     is_end_node=True,
                     logger=entity.logger,
                 )
@@ -194,7 +196,8 @@ class BaseRoutineEntity:
                 "parents": parents,
                 "children": children,
                 "delay": str(entity.delay),
-                "duration": str(entity.duration),
+                "rts": str(entity.rts),
+                "stc": str(entity.stc),
             }
 
             action_list.append(entity_json)
@@ -296,7 +299,8 @@ class ActionEntity:
         hass: HomeAssistant,
         action: dict[str, Any],
         action_id: str,
-        duration: dict[str, timedelta],
+        rts: dict[str, timedelta],
+        stc: dict[str, timedelta],
         is_end_node: bool = False,
         delay: timedelta | None = None,
         variables: dict[str, Any] | None = None,
@@ -320,7 +324,8 @@ class ActionEntity:
             RASC_START: set[ActionEntity](),
             RASC_COMPLETE: set[ActionEntity](),
         }
-        self.duration = duration
+        self.rts = rts
+        self.stc = stc
         self.delay = delay
         self.variables = variables
         self.context = context
@@ -344,7 +349,7 @@ class ActionEntity:
             for dependency, child_set in self.children.items()
         }
         return (
-            f"ActionEntity({self.action_id}, {self.duration}"
+            f"ActionEntity({self.action_id}, {self.stc}"
             f"{', end node' if self.is_end_node else ''}"
             f", parents: {parents_str}"
             f", children: {children_str})"
@@ -393,7 +398,8 @@ class ActionEntity:
             hass=self.hass,
             action=self.action,
             action_id=self._action_id,
-            duration=self.duration,
+            rts=self.rts,
+            stc=self.stc,
         )
         new_entity.parents = self.parents
         new_entity.children = self.children
@@ -414,6 +420,10 @@ class ActionEntity:
         for child_set in self.children.values():
             all_children.update(child_set)
         return all_children
+
+    def length(self, entity_id: str) -> timedelta:
+        """Get length for scheduling purposes."""
+        return self.rts[entity_id] + self.stc[entity_id]
 
     def is_descendant_of(self, action_id: str) -> bool:
         """Check if the action is a descendant of the current action."""

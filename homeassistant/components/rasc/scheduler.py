@@ -59,7 +59,7 @@ from homeassistant.helpers.template import device_entities
 from homeassistant.helpers.typing import ConfigType
 
 from .abstraction import RASCAbstraction
-from .const import ACTION_LENGTH_PADDING, CONF_TRANSITION, DOMAIN
+from .const import CONF_TRANSITION, DOMAIN
 from .entity import (
     ActionEntity,
     BaseRoutineEntity,
@@ -121,24 +121,31 @@ def create_routine(
             else:
                 transition = None
             target_entities = get_target_entities(hass, script)
-            estimated_duration = dict[str, timedelta]()
-            for entity in target_entities:
-                entity_id = get_entity_id_from_number(hass, entity)
-                estimated_entity_duration = (
-                    rasc.get_action_length_estimate(
-                        entity_id, action=action_wo_platform, transition=transition
-                    )
-                    + ACTION_LENGTH_PADDING
+            estimated_rts = dict[str, timedelta]()
+            estimated_stc = dict[str, timedelta]()
+            for target_entity in target_entities:
+                entity_id = get_entity_id_from_number(hass, target_entity)
+                estimated_rts_sec = rasc.get_action_length_estimate(
+                    entity_id,
+                    action=action_wo_platform,
+                    transition=transition,
+                    part="rts",
                 )
-                estimated_duration[entity_id] = generate_duration(
-                    estimated_entity_duration
+                estimated_stc_sec = rasc.get_action_length_estimate(
+                    entity_id,
+                    action=action_wo_platform,
+                    transition=transition,
+                    part="stc",
                 )
+                estimated_rts[entity_id] = generate_duration(estimated_rts_sec)
+                estimated_stc[entity_id] = generate_duration(estimated_stc_sec)
 
             entities[action_id] = ActionEntity(
                 hass=hass,
                 action=script,
                 action_id=action_id,
-                duration=estimated_duration,
+                rts=estimated_rts,
+                stc=estimated_stc,
                 logger=_LOGGER,
             )
 
@@ -190,7 +197,8 @@ def create_routine(
         hass=hass,
         action={},
         action_id="",
-        duration={},
+        rts={},
+        stc={},
         is_end_node=True,
         logger=_LOGGER,
     )
@@ -264,24 +272,31 @@ def _create_routine(  # noqa: C901
             else:
                 transition = None
             target_entities = get_target_entities(hass, script)
-            estimated_duration = dict[str, timedelta]()
+            estimated_rts = dict[str, timedelta]()
+            estimated_stc = dict[str, timedelta]()
             for target_entity in target_entities:
                 entity_id = get_entity_id_from_number(hass, target_entity)
-                estimated_entity_duration = (
-                    rasc.get_action_length_estimate(
-                        entity_id, action=action_wo_platform, transition=transition
-                    )
-                    + ACTION_LENGTH_PADDING
+                estimated_rts_sec = rasc.get_action_length_estimate(
+                    entity_id,
+                    action=action_wo_platform,
+                    transition=transition,
+                    part="rts",
                 )
-                estimated_duration[entity_id] = generate_duration(
-                    estimated_entity_duration
+                estimated_stc_sec = rasc.get_action_length_estimate(
+                    entity_id,
+                    action=action_wo_platform,
+                    transition=transition,
+                    part="stc",
                 )
+                estimated_rts[entity_id] = generate_duration(estimated_rts_sec)
+                estimated_stc[entity_id] = generate_duration(estimated_stc_sec)
 
             entities[action_id] = ActionEntity(
                 hass=hass,
                 action=script,
                 action_id=action_id,
-                duration=estimated_duration,
+                rts=estimated_rts,
+                stc=estimated_stc,
                 logger=_LOGGER,
             )
 
@@ -343,22 +358,25 @@ def _create_routine(  # noqa: C901
         else:
             transition = None
         target_entities = get_target_entities(hass, script)
-        estimated_duration = dict[str, timedelta]()
+        estimated_rts = dict[str, timedelta]()
+        estimated_stc = dict[str, timedelta]()
         for target_entity in target_entities:
             entity_id = get_entity_id_from_number(hass, target_entity)
-            estimated_entity_duration = (
-                rasc.get_action_length_estimate(
-                    entity_id, action=action_wo_platform, transition=transition
-                )
-                + ACTION_LENGTH_PADDING
+            estimated_rts_sec = rasc.get_action_length_estimate(
+                entity_id, action=action_wo_platform, transition=transition, part="rts"
             )
-            estimated_duration[entity_id] = generate_duration(estimated_entity_duration)
+            estimated_stc_sec = rasc.get_action_length_estimate(
+                entity_id, action=action_wo_platform, transition=transition, part="stc"
+            )
+            estimated_rts[entity_id] = generate_duration(estimated_rts_sec)
+            estimated_stc[entity_id] = generate_duration(estimated_stc_sec)
 
         entities[action_id] = ActionEntity(
             hass=hass,
             action=script,
             action_id=action_id,
-            duration=estimated_duration,
+            rts=estimated_rts,
+            stc=estimated_stc,
             logger=_LOGGER,
         )
 
@@ -600,7 +618,7 @@ def output_routine(routine_id: str, actions: dict[str, ActionEntity]) -> None:
             "parents": parents,
             "children": children,
             "delay": str(entity.delay),
-            "duration": str(entity.duration),
+            "duration": str(entity.stc),
         }
 
         action_list.append(entity_json)
@@ -880,6 +898,8 @@ class LineageTable:
             )
 
         lt.free_slots = copy.deepcopy(self._free_slots)
+
+        _LOGGER.log(logging.DEBUG, "Just duplicated lineage table!")
         return lt
 
     def add_entity(self, entity_id: str) -> None:
@@ -1172,7 +1192,7 @@ class BaseScheduler:
             return None
 
         # Check if the slot is big enough to place the action
-        if (slot_end - max(slot_start, now)).total_seconds() < new_action.duration[
+        if (slot_end - max(slot_start, now)).total_seconds() < new_action.stc[
             entity_id
         ].total_seconds():
             _LOGGER.error(
@@ -1479,7 +1499,7 @@ class BaseScheduler:
 
         for entity_id, start_time in group_slot_start_time.items():
             action_st = max(start_time, now)
-            action_end = action_st + action.duration[entity_id]
+            action_end = action_st + action.stc[entity_id]
 
             self.schedule_action(
                 (start_time, free_slots[entity_id][start_time]),
@@ -1832,12 +1852,12 @@ class TimeLineScheduler(BaseScheduler):
             if (
                 slot_end
                 and (slot_end - max(slot_start, now)).total_seconds()
-                < new_action.duration[entity_id].total_seconds()
+                < new_action.stc[entity_id].total_seconds()
             ):
                 continue
 
             action_st = max(slot_start, now)
-            action_end = action_st + new_action.duration[entity_id]
+            action_end = action_st + new_action.stc[entity_id]
             cur_preset = preset.union(
                 self.get_preset(
                     (action_st, action_end), entity_id, lock_leasing_status, new_action
@@ -2029,7 +2049,7 @@ class TimeLineScheduler(BaseScheduler):
 
         for entity_id, start_time in group_slot_start_time.items():
             action_st = max(start_time, now)
-            action_end = action_st + action.duration[entity_id]
+            action_end = action_st + action.stc[entity_id]
 
             self.schedule_action(
                 (start_time, free_slots[entity_id][start_time]),
@@ -2454,7 +2474,8 @@ class RascalScheduler(BaseScheduler):
 
     def _remove_routine_from_serialization_order(self, routine_id: str) -> None:
         """Remove routine from the serialization order."""
-        _LOGGER.info("Remove routine %s from the serialization order", routine_id)
+        if routine_id in self._serialization_order:
+            _LOGGER.info("Remove routine %s from the serialization order", routine_id)
         self._serialization_order.pop(routine_id)
 
     def _remove_routine_from_lock_queues(self, routine: RoutineEntity) -> None:
@@ -2937,7 +2958,7 @@ class RascalScheduler(BaseScheduler):
     def _start_routine(self, routine: RoutineEntity) -> None:
         """Start the given routine."""
 
-        _LOGGER.info("Start the routine %s", routine.routine_id)
+        _LOGGER.info("Start routine %s", routine.routine_id)
 
         # Start the action that doesn't have the parents
         for action_entity in list(routine.actions.values())[:-1]:
@@ -2994,7 +3015,7 @@ class RascalScheduler(BaseScheduler):
             #     # _LOGGER.debug("Action %s's routine has already started", action.action_id)
             #     return
 
-        _LOGGER.info("Start the action %s", action.action_id)
+        _LOGGER.info("Start action %s (time: %s)", action.action_id, datetime.now())
         self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
 
     def _is_action_ready(self, action: ActionEntity) -> bool:
@@ -3329,7 +3350,7 @@ class RascalScheduler(BaseScheduler):
         if not self._reschedule_handler:
             return
 
-        _LOGGER.info("Start the action %s later", action_id)
+        _LOGGER.info("Start action %s later", action_id)
         action = self.get_action(action_id)
         if not action:
             raise ValueError("Action %s is not found" % action_id)

@@ -129,7 +129,7 @@ class BaseRescheduler(TimeLineScheduler):
                     continue
                 last_end_before = action_lock.end_time
                 continue
-            action_length = action_lock.action.duration[entity_id] or timedelta(0)
+            action_length = action_lock.action.length(entity_id) or timedelta(0)
             new_action_start = action_lock.start_time + diff
             if diff > timedelta(0) and not start_after:
                 start_after = new_action_start
@@ -269,7 +269,7 @@ class BaseRescheduler(TimeLineScheduler):
                 if entity_id not in free_slots:
                     raise ValueError("Entity %s has no free slots." % entity_id)
                 # update the entity's free slots
-                action_end = action_st + action.duration[entity_id]
+                action_end = action_st + action.length(entity_id)
                 free_slot = self._find_slot_including_time_range(
                     free_slots[entity_id], (action_st, action_end), entity_id
                 )
@@ -791,7 +791,7 @@ class BaseRescheduler(TimeLineScheduler):
             max_parent_end_time = min_start_time
         else:
             max_parent_end_time = max(max_parent_end_time, min_start_time)
-        action_length = max(action.duration.values())
+        action_length = max(action.stc.values())
         action_st, _ = self._identify_first_common_idle_time_after(
             target_entities, max_parent_end_time, action_length, lt
         )
@@ -814,7 +814,7 @@ class BaseRescheduler(TimeLineScheduler):
         )
         for target_entity in target_entities:
             entity_id = get_entity_id_from_number(self._hass, target_entity)
-            action_end = action_st + action.duration[entity_id]
+            action_end = action_st + action.length(entity_id)
             free_slot = self._find_slot_including_time_range(
                 free_slots[entity_id], (action_st, action_end), entity_id
             )
@@ -912,7 +912,7 @@ class BaseRescheduler(TimeLineScheduler):
                 if entity_id not in wait_queues:
                     wait_queues[entity_id] = list[tuple[timedelta, ActionEntity]]()
                 heapq.heappush(
-                    wait_queues[entity_id], (action.duration[entity_id], action)
+                    wait_queues[entity_id], (action.length(entity_id), action)
                 )
                 # LOGGER.debug(f"Added {child.action_id} to {entity_id}'s wait queue")
 
@@ -1016,7 +1016,7 @@ class BaseRescheduler(TimeLineScheduler):
                     if entity_id not in wait_queues:
                         wait_queues[entity_id] = list[tuple[timedelta, ActionEntity]]()
                     heapq.heappush(
-                        wait_queues[entity_id], (child.duration[entity_id], child)
+                        wait_queues[entity_id], (child.length(entity_id), child)
                     )
                     # LOGGER.debug(f"Added {child.action_id} to {entity_id}'s wait queue")
 
@@ -1036,7 +1036,7 @@ class BaseRescheduler(TimeLineScheduler):
                 sjf_metrics.record_scheduled_action_start(
                     action_st, entity_id, shortest_action.action_id
                 )
-                action_end = action_st + shortest_action.duration[entity_id]
+                action_end = action_st + shortest_action.length(entity_id)
                 sjf_metrics.record_scheduled_action_end(
                     action_end, entity_id, shortest_action.action_id
                 )
@@ -1046,9 +1046,8 @@ class BaseRescheduler(TimeLineScheduler):
 
                 # only update the next slot if the action has a duration and
                 # the action's new schedule created no holes
-                if (
-                    action_st != next_slots[entity_id]
-                    and not shortest_action.duration[entity_id]
+                if action_st != next_slots[entity_id] and not shortest_action.length(
+                    entity_id
                 ):
                     continue
                 next_slots[entity_id] = action_end
@@ -1194,12 +1193,11 @@ class BaseRescheduler(TimeLineScheduler):
                 wait_queues[entity_id].remove(found_action)
                 if not wait_queues[entity_id]:
                     to_remove.add(entity_id)
-            if (
-                action_st != next_slots[entity_id]
-                and not chosen_action.duration[entity_id]
+            if action_st != next_slots[entity_id] and not chosen_action.length(
+                entity_id
             ):
                 continue
-            next_slots[entity_id] = action_st + chosen_action.duration[entity_id]
+            next_slots[entity_id] = action_st + chosen_action.length(entity_id)
             # update the schedule metrics
             metrics.record_scheduled_action_start(
                 action_st, entity_id, chosen_action.action_id
@@ -1487,7 +1485,7 @@ class BaseRescheduler(TimeLineScheduler):
                 )
             )
 
-        action_length = action_lock.action.duration[entity_id] or timedelta(0)
+        action_length = action_lock.action.length(entity_id) or timedelta(0)
         for st_time, end_time in self._lineage_table.free_slots[entity_id].items():
             if end_time and end_time <= time:
                 continue
@@ -1854,7 +1852,7 @@ class BaseRescheduler(TimeLineScheduler):
                 get_entity_id_from_number(self._hass, target_entity)
                 for target_entity in target_entities
             ]
-            action_length = max(action.duration.values())
+            action_length = max(action.stc.values())
             (
                 new_slot_st,
                 _,
@@ -1904,7 +1902,7 @@ class BaseRescheduler(TimeLineScheduler):
                     max_end_time = max_routine_end_time
                     if max_parent_end_time:
                         max_end_time = max(max_parent_end_time, max_end_time)
-                    action_length = max(action.duration.values())
+                    action_length = max(action.stc.values())
                     (
                         new_slot_st,
                         _,
@@ -1926,7 +1924,7 @@ class BaseRescheduler(TimeLineScheduler):
                                     action.action_id, target_entity_id
                                 )
                             )
-                        action_length = action_lock.action.duration[target_entity_id]
+                        action_length = action_lock.action.stc[target_entity_id]
                         action_end = new_slot_st + action_length
                         end_time_per_entity[target_entity_id] = max(
                             end_time_per_entity.get(target_entity_id, action_end),
@@ -1973,7 +1971,7 @@ class BaseRescheduler(TimeLineScheduler):
                 get_entity_id_from_number(self._hass, target_entity)
                 for target_entity in target_entities
             ]
-            action_length = max(action.duration.values())
+            action_length = max(action.stc.values())
             (
                 new_slot_st,
                 _,
@@ -2024,7 +2022,7 @@ class BaseRescheduler(TimeLineScheduler):
         # time range check
         slot_start = time_range[0]
         slot_end = time_range[1] if time_range[1] else None
-        action_length = action.duration[entity_id]
+        action_length = action.length(entity_id)
         earliest_action_start = slot_start
         latest_action_start = slot_end - action_length if slot_end else None
         if latest_action_start and latest_action_start < earliest_action_start:
@@ -2158,7 +2156,7 @@ class BaseRescheduler(TimeLineScheduler):
             if start_time := self._eligibility_test(entity_id, action_id, time_range):
                 if self._scheduling_policy in (LOCAL_FIRST):
                     return action_id, start_time
-                action_length = action_lock.action.duration[entity_id]
+                action_length = action_lock.action.length(entity_id)
                 if self._scheduling_policy in (LOCAL_SHORTEST):
                     if not best_metric or action_length < best_metric:
                         best_metric = action_length
@@ -2574,7 +2572,9 @@ class RascalRescheduler:
             return
         if not entity_id:
             raise ValueError("Entity ID is missing in the event.")
-        expected_action_length = action.duration[entity_id]
+        action_lock = self._scheduler.get_action_info(action_id, entity_id)
+        expected_action_length = action_lock.duration
+        # expected_action_length = action.length(entity_id)
         if isinstance(timer_delay, timedelta):
             timer_delay = timer_delay.total_seconds()
 
@@ -2582,7 +2582,6 @@ class RascalRescheduler:
             action_complete = self._scheduler.is_action_complete(action, entity_id)
             if action_complete:
                 return 0.0
-            action.duration[entity_id] = expected_action_length * 1.1
             extra = expected_action_length.total_seconds() * 0.1
             return extra
 
@@ -2595,7 +2594,6 @@ class RascalRescheduler:
             )
             if action_length_estimate == expected_action_length:
                 return 0.0
-            action.duration[entity_id] = action_length_estimate
             extra = (action_length_estimate - expected_action_length).total_seconds()
             return extra
 
@@ -2604,7 +2602,7 @@ class RascalRescheduler:
             """Check if the action is about to go on overtime and adjust the schedule."""
             try:
                 LOGGER.debug(
-                    "Waiting for %s on %s %s seconds", action_id, entity_id, timer_delay
+                    "%s on %s for %s seconds", action_id, entity_id, timer_delay
                 )
                 await asyncio.sleep(timer_delay)
                 LOGGER.debug("Handling overtime for %s on %s", action_id, entity_id)
@@ -2635,10 +2633,13 @@ class RascalRescheduler:
                 return
 
         LOGGER.info(
-            "Setting up overtime check for %s on %s in %s seconds. timer handles: %s",
+            "Setting up overtime check for %s on %s in %s seconds,\nat %s/%s for %s. timer handles: %s",
             action_id,
             entity_id,
             timer_delay,
+            datetime.fromtimestamp(t.time()),
+            datetime.now(),
+            datetime.fromtimestamp(t.time() + timer_delay),
             self._timer_handles,
         )
         # cancel = async_call_later(self._hass, timer_delay, _handle_overtime)
@@ -2732,7 +2733,9 @@ class RascalRescheduler:
             entity_id = event.data.get(ATTR_ENTITY_ID)
             if not entity_id:
                 return
-            timer_delay = action.duration[entity_id] * 0.95
+            # timer_delay_sec = action.length(entity_id).total_seconds() * 0.95
+            # timer_delay = timedelta(seconds=timer_delay_sec)
+            timer_delay = action.stc[entity_id] * 0.95
             self._setup_overtime_check(event, timer_delay)
         elif response == RASC_COMPLETE:
             await self._handle_undertime(event)
