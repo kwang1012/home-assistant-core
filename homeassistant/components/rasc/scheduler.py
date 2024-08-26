@@ -644,11 +644,15 @@ def output_all(
     lock_waitlist: dict[str, list[str]] | None = None,
     preset: set[str] | None = None,
     postset: set[str] | None = None,
+    conflict = False
 ):
     """Output specific info."""
 
-    dirname = f"trail-{TRAIL.num:04d}"
-    TRAIL.increment()
+    if conflict:
+        dirname = f"conflict-{TRAIL.num:04d}"
+    else:
+        dirname = f"trail-{TRAIL.num:04d}"
+        TRAIL.increment()
 
     fp = os.path.join(LOG_PATH, dirname)
     logger.debug("Output logs to %s.", fp)
@@ -905,6 +909,10 @@ class BaseScheduler:
     _serialization_order: Queue[str, RoutineInfo]
     _lineage_table: LineageTable
     _scheduling_policy: str
+    _real_schedule: dict[str, list[tuple[datetime, datetime]]] = {}
+
+    def get_real_schedule(self):
+        return self._real_schedule
 
     @property
     def lineage_table(self) -> LineageTable:
@@ -1416,6 +1424,12 @@ class BaseScheduler:
                 )
                 return
 
+        if entity_id not in self._real_schedule:
+            self._real_schedule[entity_id] = []
+        self._real_schedule[entity_id].append({
+            "action": new_action.action_id,
+            "slot": new_action_slot
+        })
         lock_queues[entity_id][new_action.action_id] = new_action_info
         _LOGGER.debug(
             "Schedule action %s to the lock queue %s", new_action.action_id, entity_id
@@ -1478,7 +1492,7 @@ class BaseScheduler:
                 group_slot_start_time[entity_id] = start_time
 
         for entity_id, start_time in group_slot_start_time.items():
-            action_st = max(start_time, now)
+            action_st = group_action_start_time[entity_id]
             action_end = action_st + action.duration[entity_id]
 
             self.schedule_action(
@@ -1851,9 +1865,10 @@ class TimeLineScheduler(BaseScheduler):
             )
 
             if cur_preset.intersection(cur_postset):
-                _LOGGER.error(
-                    "Attempt to schedule at the time slot %s with the action start time %s. Intersection conflict: %s",
+                _LOGGER.warning(
+                    "Attempt to schedule at the time slot %s with the action (%s) start time %s. Intersection conflict: %s",
                     slot_start,
+                    new_action.action_id,
                     action_st,
                     cur_preset.intersection(cur_postset),
                 )
@@ -1863,7 +1878,7 @@ class TimeLineScheduler(BaseScheduler):
             if self.conflict_determined_serializability_in_case_tl(
                 cur_preset, cur_postset
             ):
-                _LOGGER.error(
+                _LOGGER.info(
                     "Attempt to schedule at the time slot %s with the action start time %s. "
                     "Determined serializability conflict, preset: %s, postset: %s",
                     slot_start,
@@ -1987,7 +2002,7 @@ class TimeLineScheduler(BaseScheduler):
             )
 
             if not start_time:
-                _LOGGER.error(
+                _LOGGER.warning(
                     "Failed to find a time slot start at %s. Need to reschedule",
                     now,
                 )
@@ -1999,8 +2014,9 @@ class TimeLineScheduler(BaseScheduler):
         if not group_action_start_time:
             raise ValueError("No entities to schedule on!")
 
+        actual_start_time = now
         while not self.same_start_time(group_action_start_time):
-            next_now = max(group_action_start_time.values())
+            actual_start_time = max(group_action_start_time.values())
             group_action_start_time.clear()
             group_slot_start_time.clear()
 
@@ -2008,7 +2024,7 @@ class TimeLineScheduler(BaseScheduler):
                 entity_id = get_entity_id_from_number(self._hass, entity)
 
                 start_time, conflict = self.get_available_ts_in_case_tl(
-                    next_now,
+                    actual_start_time,
                     free_slots,
                     entity_id,
                     lock_leasing_status,
@@ -2018,17 +2034,22 @@ class TimeLineScheduler(BaseScheduler):
                 )
 
                 if not start_time:
-                    _LOGGER.error(
+                    _LOGGER.warning(
                         "Failed to find a time slot start at %s. Need to reschedule",
                         now,
                     )
                     return False, max_end_time, conflict
 
-                group_action_start_time[entity_id] = max(start_time, next_now)
+                group_action_start_time[entity_id] = max(start_time, actual_start_time)
                 group_slot_start_time[entity_id] = start_time
 
+        _LOGGER.info("Action %s: group_action_start_time: %s", action.action_id, group_action_start_time)
+        _LOGGER.info("Action %s: group_slot_start_time: %s", action.action_id, group_slot_start_time)
+
+        actual_start_time = max(group_action_start_time.values())
+
         for entity_id, start_time in group_slot_start_time.items():
-            action_st = max(start_time, now)
+            action_st = max(actual_start_time, now)
             action_end = action_st + action.duration[entity_id]
 
             self.schedule_action(
@@ -2845,7 +2866,7 @@ class RascalScheduler(BaseScheduler):
                             "Routine %s is not found in the serialization order"
                             % conflict_routine_id
                         )
-                    for action in conflict_routine_info.routine.actions.values():
+                    for action in list(conflict_routine_info.routine.actions.values())[:-1]:
                         conflict_action_targets = set(
                             get_target_entities(self._hass, action.action)
                         )
@@ -2968,31 +2989,31 @@ class RascalScheduler(BaseScheduler):
 
         if not self._is_action_ready(action):
             _LOGGER.info("Action %s is not ready to start", action.action_id)
-            return
-            # prev_start_time = action_lock.start_time
-            # await self._async_wait_until_beginning(action.action_id)
+            # return
+            prev_start_time = action_lock.start_time
+            await self._async_wait_until_beginning(action.action_id)
 
-            # if action.start_requested:
-            #     # _LOGGER.debug("Action %s has already started", action.action_id)
-            #     return
+            if action.start_requested:
+                # _LOGGER.debug("Action %s has already started", action.action_id)
+                return
 
-            # if random_entity_id not in self._lineage_table.lock_queues:
-            #     raise ValueError("Entity %s has no schedule." % random_entity_id)
-            # lock_queue = self.lineage_table.lock_queues[random_entity_id]
-            # if action.action_id not in lock_queue:
-            #     # _LOGGER.debug("Action %s's routine has already completed", action.action_id)
-            #     return
+            if random_entity_id not in self._lineage_table.lock_queues:
+                raise ValueError("Entity %s has no schedule." % random_entity_id)
+            lock_queue = self.lineage_table.lock_queues[random_entity_id]
+            if action.action_id not in lock_queue:
+                # _LOGGER.debug("Action %s's routine has already completed", action.action_id)
+                return
 
-            # action_lock = lock_queue[action.action_id]
-            # if not action_lock:
-            #     raise ValueError(
-            #         "Action {}'s schedule information on entity {} is missing.".format(
-            #             action.action_id, random_entity_id
-            #         )
-            #     )
-            # if action_lock.start_time < prev_start_time:
-            #     # _LOGGER.debug("Action %s's routine has already started", action.action_id)
-            #     return
+            action_lock = lock_queue[action.action_id]
+            if not action_lock:
+                raise ValueError(
+                    "Action {}'s schedule information on entity {} is missing.".format(
+                        action.action_id, random_entity_id
+                    )
+                )
+            if action_lock.start_time < prev_start_time:
+                # _LOGGER.debug("Action %s's routine has already started", action.action_id)
+                return
 
         _LOGGER.info("Start the action %s", action.action_id)
         self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
@@ -3218,6 +3239,7 @@ class RascalScheduler(BaseScheduler):
                 f"Action {action_id} has not been scheduled on entity {entity_id}."
             )
 
+        _LOGGER.info("Action %s returns lock %s", action_id, entity_id)
         next_action = self._lineage_table.lock_queues[entity_id].next(action_id)
         if not next_action:
             return False
@@ -3326,10 +3348,6 @@ class RascalScheduler(BaseScheduler):
     async def _async_wait_until_beginning(self, action_id: str) -> None:
         """Wait until the time reaches the end time of the action."""
 
-        if not self._reschedule_handler:
-            return
-
-        _LOGGER.info("Start the action %s later", action_id)
         action = self.get_action(action_id)
         if not action:
             raise ValueError("Action %s is not found" % action_id)
@@ -3345,10 +3363,11 @@ class RascalScheduler(BaseScheduler):
             )
         action_start = action_lock.start_time
         wait_seconds = (action_start - datetime.now()).total_seconds()
+        _LOGGER.info("Start the action %s %.2fs later", action_id, wait_seconds)
 
         if wait_seconds > 0:
             await asyncio.sleep(wait_seconds)
-        _LOGGER.debug("Action %s should should start now", action_id)
+        _LOGGER.info("Action %s should start now", action_id)
 
     async def _async_wait_until(self, action_id: str, entity_id: str) -> None:
         """Wait until the time reaches the end time of the action."""
@@ -3426,6 +3445,7 @@ class RascalScheduler(BaseScheduler):
     def _condition_check(self, action: ActionEntity) -> bool:
         """Condition check."""
         satisfied = True
+        _LOGGER.info("%s condition check: parents %s", action.action_id, action.parents.items())
         for dependency, parent_set in action.parents.items():
             if dependency == RASC_ACK:
                 satisfied = all(parent.action_acked for parent in parent_set)

@@ -61,7 +61,7 @@ class BaseRoutineEntity:
         routine_id: str,
         actions: dict[str, ActionEntity],
         action_script: Sequence[dict[str, Any]],
-        timeout: float = 20.0,
+        timeout: float = 1.0,
     ) -> None:
         """Initialize a routine entity."""
         self._name = name

@@ -135,10 +135,10 @@ class RASCAbstraction:
                 histories[key] = RASCHistory()
             history = histories[key].ct_history
             if not history:
-                return transition
+                return transition * 2
             dist = get_best_distribution(history)
             estimations = {
-                MEAN_ESTIMATION: dist.mean(),
+                MEAN_ESTIMATION: dist.mean() * 2,
                 P50_ESTIMATION: dist.ppf(0.5),
                 P70_ESTIMATION: dist.ppf(0.7),
                 P80_ESTIMATION: dist.ppf(0.8),
@@ -148,9 +148,9 @@ class RASCAbstraction:
             }
             if self.config[ACTION_LENGTH_ESTIMATION] in estimations:
                 return estimations[self.config[ACTION_LENGTH_ESTIMATION]]
-            return dist.mean()
+            return dist.mean() * 2
 
-        return self._get_action_length_estimate(state)
+        return self._get_action_length_estimate(state) * 2
 
     def _init_states(self, context: Context, service_call: ServiceCall):
         component: Optional[EntityComponent] = self.hass.data.get(service_call.domain)

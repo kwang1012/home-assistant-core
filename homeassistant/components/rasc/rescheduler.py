@@ -620,7 +620,7 @@ class BaseRescheduler(TimeLineScheduler):
                     entity_descheduled_actions[entity_id][routine_id].append(
                         descheduled_action.duplicate
                     )
-        # LOGGER.debug(f"{entity_descheduled_actions=}")
+        LOGGER.error(f"{entity_descheduled_actions=}")
 
         actions_with_dependencies = dict[str, ActionEntity]()
         for routine_actions in entity_descheduled_actions.values():

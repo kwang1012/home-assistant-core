@@ -257,6 +257,9 @@ def trigger_automations_later(
     routine_arrival_filename: str,
 ) -> None:
     """Parse the routine arrival dataset."""
+
+    schedule_result = "schedule_result.json"
+
     rasc_datasets = "homeassistant/components/rasc/datasets"
     routine_arrival_pathname = os.path.join(rasc_datasets, routine_arrival_filename)
     if not os.path.exists(routine_arrival_pathname):
@@ -319,6 +322,10 @@ def trigger_automations_later(
                 indent=2,
             )
         )
+        scheduler: RascalScheduler = hass.data.get(DOMAIN_RASCALSCHEDULER)
+        if scheduler:
+            with open(schedule_result, "w") as f:
+                json.dump(scheduler.get_real_schedule(), f, indent=2, default=str)
         if all(
             remained_routine == 0 for remained_routine in remained_routines.values()
         ):
