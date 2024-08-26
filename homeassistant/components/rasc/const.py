@@ -28,8 +28,9 @@ RASC_THERMOSTAT_TARGET = "target"
 
 CONF_TRANSITION = "transition"
 DEFAULT_FAILURE_TIMEOUT = 30  # s
+PROCESSING_OVERHEADS = 1.5  # s
+MAX_SCHEDULE_TIME = 0.5  # s
 MIN_RESCHEDULE_TIME = 0.05  # second
-ACK_TO_START = 0.4  # second
 
 SUPPORTED_PLATFORMS: Final[list[Platform]] = [
     Platform.SWITCH,

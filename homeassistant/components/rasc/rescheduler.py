@@ -791,7 +791,7 @@ class BaseRescheduler(TimeLineScheduler):
             max_parent_end_time = min_start_time
         else:
             max_parent_end_time = max(max_parent_end_time, min_start_time)
-        action_length = max(action.stc.values())
+        action_length = max(action.length(entity_id) for entity_id in target_entities)
         action_st, _ = self._identify_first_common_idle_time_after(
             target_entities, max_parent_end_time, action_length, lt
         )
@@ -1852,7 +1852,7 @@ class BaseRescheduler(TimeLineScheduler):
                 get_entity_id_from_number(self._hass, target_entity)
                 for target_entity in target_entities
             ]
-            action_length = max(action.stc.values())
+            action_length = max(action.length(entity_id) for entity_id in entity_ids)
             (
                 new_slot_st,
                 _,
@@ -1902,7 +1902,9 @@ class BaseRescheduler(TimeLineScheduler):
                     max_end_time = max_routine_end_time
                     if max_parent_end_time:
                         max_end_time = max(max_parent_end_time, max_end_time)
-                    action_length = max(action.stc.values())
+                    action_length = max(
+                        action.length(entity_id) for entity_id in target_entities
+                    )
                     (
                         new_slot_st,
                         _,
@@ -1924,7 +1926,7 @@ class BaseRescheduler(TimeLineScheduler):
                                     action.action_id, target_entity_id
                                 )
                             )
-                        action_length = action_lock.action.stc[target_entity_id]
+                        action_length = action_lock.action.length(target_entity_id)
                         action_end = new_slot_st + action_length
                         end_time_per_entity[target_entity_id] = max(
                             end_time_per_entity.get(target_entity_id, action_end),
@@ -1971,7 +1973,7 @@ class BaseRescheduler(TimeLineScheduler):
                 get_entity_id_from_number(self._hass, target_entity)
                 for target_entity in target_entities
             ]
-            action_length = max(action.stc.values())
+            action_length = max(action.length(entity_id) for entity_id in entity_ids)
             (
                 new_slot_st,
                 _,
@@ -2578,6 +2580,9 @@ class RascalRescheduler:
         if isinstance(timer_delay, timedelta):
             timer_delay = timer_delay.total_seconds()
 
+        # if timer_delay <= 1:
+        #     return
+
         def _get_extra_anticipatory() -> float:
             action_complete = self._scheduler.is_action_complete(action, entity_id)
             if action_complete:
@@ -2602,7 +2607,10 @@ class RascalRescheduler:
             """Check if the action is about to go on overtime and adjust the schedule."""
             try:
                 LOGGER.debug(
-                    "%s on %s for %s seconds", action_id, entity_id, timer_delay
+                    "Set up overtime check for %s on %s -- %s seconds later",
+                    action_id,
+                    entity_id,
+                    timer_delay,
                 )
                 await asyncio.sleep(timer_delay)
                 LOGGER.debug("Handling overtime for %s on %s", action_id, entity_id)
@@ -2642,6 +2650,7 @@ class RascalRescheduler:
             datetime.fromtimestamp(t.time() + timer_delay),
             self._timer_handles,
         )
+        output_all(LOGGER, lock_queues=self._scheduler.lineage_table.lock_queues)
         # cancel = async_call_later(self._hass, timer_delay, _handle_overtime)
         task = self._hass.async_create_task(_handle_overtime())
         # self._timer_handles[entity_id] = (action_id, cancel)

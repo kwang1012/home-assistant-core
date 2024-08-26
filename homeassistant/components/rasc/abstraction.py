@@ -136,7 +136,7 @@ class RASCAbstraction:
                 histories[key] = RASCHistory()
             if part == "stc":
                 history = histories[key].ct_history
-            else:
+            else:  # part == "rts"
                 history = histories[key].st_history
             if not history:
                 return transition

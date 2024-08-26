@@ -482,7 +482,6 @@ class ActionEntity:
         try:
             handler = f"_async_{action}_step"
             await getattr(self, handler)()
-            _LOGGER.info("Action %s completed on attach_triggered", self.action_id)
 
         except Exception as ex:  # pylint: disable=broad-except
             self._handle_exception(
