@@ -120,6 +120,7 @@ class RASCAbstraction:
         entity_id: str,
         action: str | None = None,
         transition: float | None = None,
+        part: str | None = "stc",
         quart: float | None = None,
     ) -> float:
         """Get an action length estimate."""
@@ -133,7 +134,10 @@ class RASCAbstraction:
             histories = self._store.histories
             if key not in histories:
                 histories[key] = RASCHistory()
-            history = histories[key].ct_history
+            if part == "stc":
+                history = histories[key].ct_history
+            else:  # part == "rts"
+                history = histories[key].st_history
             if not history:
                 return transition
             dist = get_best_distribution(history)
@@ -339,7 +343,6 @@ class RASCAbstraction:
         asyncio.Task[ServiceResponse],
     ]:
         """Execute a service."""
-
 
         # LOGGER.info(f"{service_call.service=} {service_call.data=}")
         # for response wait-notify

@@ -1208,6 +1208,7 @@ RASC_START = "start"
 RASC_COMPLETE = "complete"
 RASC_RESPONSE = "rasc_response"
 RASC_SCHEDULED = "scheduled"
+RASC_INCOMPLETE = "not_complete"
 
 DOMAIN_AUTOMATION: Final = "automation"
 DOMAIN_SCRIPT: Final = "script"

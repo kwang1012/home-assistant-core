@@ -42,7 +42,7 @@ LOG_PATH = set_log_dir()
 
 def set_logger(name: str = "scheduler") -> logging.Logger:
     """Set logger."""
-    filename = f"rasc_{name}"
+    filename = f"rasc.{name}"
     logger = logging.getLogger(filename)
     logger.setLevel(logging.DEBUG)
     log_format = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
