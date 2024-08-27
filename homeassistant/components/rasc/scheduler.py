@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from homeassistant.const import (
     ATTR_ACTION_ID,
+    ATTR_ENTITY_ID,
     CONF_CHOOSE,
     CONF_CONDITION,
     CONF_DELAY,
@@ -38,6 +39,7 @@ from homeassistant.const import (
     LOCK_STATE_SCHEDULED,
     RASC_ACK,
     RASC_COMPLETE,
+    RASC_INCOMPLETE,
     RASC_RESPONSE,
     RASC_SCHEDULED,
     RASC_START,
@@ -2994,7 +2996,7 @@ class RascalScheduler(BaseScheduler):
         if action.start_requested:
             return
 
-        if not self._is_action_ready(action):
+        while not self._is_action_ready(action):
             _LOGGER.info("Action %s is not ready to start", action.action_id)
             # return
             prev_start_time = action_lock.start_time
@@ -3021,6 +3023,35 @@ class RascalScheduler(BaseScheduler):
             if action_lock.start_time < prev_start_time:
                 # _LOGGER.debug("Action %s's routine has already started", action.action_id)
                 return
+
+            if not self._are_prev_actions_over(action):
+                # find the enitty where the previous action is not over
+                _LOGGER.info(
+                    "Action %s's entity's previous actions are not over. Reschedule!",
+                    action.action_id,
+                )
+                for entity in target_entities:
+                    entity_id = get_entity_id_from_number(self._hass, entity)
+                    prev_action_lock = self._lineage_table.lock_queues[entity_id].prev(
+                        action.action_id
+                    )
+                    if not prev_action_lock:
+                        continue
+                    prev_action = prev_action_lock.action
+                    if self._is_action_state(prev_action, entity_id, RASC_COMPLETE):
+                        continue
+                    _LOGGER.info(
+                        "Reschedule overtime action %s on entity %s",
+                        action.action_id,
+                        entity_id,
+                    )
+                    event_data = {
+                        CONF_TYPE: RASC_INCOMPLETE,
+                        ATTR_ACTION_ID: action.action_id,
+                        ATTR_ENTITY_ID: entity_id,
+                    }
+                    event = Event("", event_data, time_fired=datetime.now())
+                    await self._reschedule_handler(event)
 
         _LOGGER.info(
             "Start action %s at %s vs scheduled start time: %s",
@@ -3105,15 +3136,23 @@ class RascalScheduler(BaseScheduler):
                     action_lock.start_time,
                 )
                 return False
-            # if entity_id not in self._lineage_table.lock_queues:
-            #     raise ValueError("Entity %s has no schedule." % entity_id)
-            # prev_action_lock = self._lineage_table.lock_queues[entity_id].prev(action.action_id)
-            # if not prev_action_lock:
-            #     continue
-            # prev_action = prev_action_lock.action
-            # if not self._is_action_state(prev_action, entity, RASC_COMPLETE):
-            #     return False
 
+        return True
+
+    def _are_prev_actions_over(self, action: ActionEntity) -> bool:
+        target_entities = get_target_entities(self._hass, action.action)
+        for entity in target_entities:
+            entity_id = get_entity_id_from_number(self._hass, entity)
+            if entity_id not in self._lineage_table.lock_queues:
+                raise ValueError("Entity %s has no schedule." % entity_id)
+            prev_action_lock = self._lineage_table.lock_queues[entity_id].prev(
+                action.action_id
+            )
+            if not prev_action_lock:
+                continue
+            prev_action = prev_action_lock.action
+            if not self._is_action_state(prev_action, entity_id, RASC_COMPLETE):
+                return False
         return True
 
     async def handle_event(self, event: Event) -> None:  # noqa: C901
@@ -3379,7 +3418,8 @@ class RascalScheduler(BaseScheduler):
         action_start = action_lock.start_time
         wait_seconds = (action_start - datetime.now()).total_seconds()
 
-        if wait_seconds > 1:
+        start = time.time()
+        if wait_seconds > 0:
             _LOGGER.info(
                 "Action %s should start at %s, wait %s s",
                 action_id,
@@ -3387,7 +3427,13 @@ class RascalScheduler(BaseScheduler):
                 wait_seconds,
             )
             await asyncio.sleep(wait_seconds)
-        _LOGGER.debug("Action %s should start now", action_id)
+        end = time.time()
+        _LOGGER.info(
+            "Action %s should start now: %s, after sleeping %s s",
+            action_id,
+            datetime.now(),
+            end - start,
+        )
 
     async def _async_wait_until(self, action_id: str, entity_id: str) -> None:
         """Wait until the time reaches the end time of the action."""

@@ -42,6 +42,7 @@ from homeassistant.const import (
     OPTIMALWO,
     PROACTIVE,
     RASC_COMPLETE,
+    RASC_INCOMPLETE,
     RASC_START,
     REACTIVE,
     RV,
@@ -2561,10 +2562,51 @@ class RascalRescheduler:
                 self._rescheduler.serialization_order[routine_id] = routine_info
                 self._scheduler.serialization_order[routine_id] = routine_info
 
-    def _setup_overtime_check(self, event: Event, timer_delay: timedelta) -> None:
-        """Set up the timer for the rescheduler."""
-        if self._resched_trigger in (REACTIVE):
+    def _init_timer_delay(self, event: Event) -> float:
+        entity_id: Optional[str] = event.data.get(ATTR_ENTITY_ID)
+        action_id: Optional[str] = event.data.get(ATTR_ACTION_ID)
+        action = self._scheduler.get_action(action_id)
+        if not action:
             return
+        if not entity_id:
+            return
+        # timer_delay_sec = action.length(entity_id).total_seconds() * 0.95
+        # timer_delay = timedelta(seconds=timer_delay_sec)
+        timer_delay = action.stc[entity_id] * 0.95
+        return timer_delay
+
+    def _get_extra_anticipatory(
+        self,
+        action: ActionEntity,
+        entity_id: str,
+        expected_action_length: timedelta,
+    ) -> float:
+        action_complete = self._scheduler.is_action_complete(action, entity_id)
+        if action_complete:
+            return 0.0
+        extra = expected_action_length.total_seconds() * 0.1
+        return extra
+
+    def _get_extra_proactive(
+        self,
+        action: ActionEntity,
+        entity_id: str,
+        expected_action_length: timedelta,
+    ) -> float:
+        rasc: RASCAbstraction = self._hass.data[DOMAIN]
+        action_length_estimate = generate_duration(
+            rasc.get_action_length_estimate(
+                entity_id, action.service, action.transition
+            )
+        )
+        if action_length_estimate == expected_action_length:
+            return 0.0
+        extra = (action_length_estimate - expected_action_length).total_seconds()
+        return extra
+
+    async def _handle_overtime(self, event: Event) -> None:
+        """Check if the action is about to go on overtime and adjust the schedule."""
+
         entity_id: Optional[str] = event.data.get(ATTR_ENTITY_ID)
         action_id: Optional[str] = event.data.get(ATTR_ACTION_ID)
         if not action_id:
@@ -2575,71 +2617,69 @@ class RascalRescheduler:
         if not entity_id:
             raise ValueError("Entity ID is missing in the event.")
         action_lock = self._scheduler.get_action_info(action_id, entity_id)
+        if not action_lock:
+            raise ValueError(
+                "Action {}'s schedule information on entity {} is missing.".format(
+                    action_id, entity_id
+                )
+            )
         expected_action_length = action_lock.duration
-        # expected_action_length = action.length(entity_id)
+
+        if entity_id in self._timer_handles:
+            saved_action_id, saved_cancel = self._timer_handles[entity_id]
+            if saved_action_id != action_id:
+                raise ValueError(
+                    "Action ID mismatch for entity {} in the timer handle. saved: {}, new: {}".format(
+                        entity_id, saved_action_id, action_id
+                    )
+                )
+            self._timer_handles[entity_id] = (None, None)
+        else:
+            saved_action_id, saved_cancel = None, None
+
+        extra = 0.0
+        if self._resched_trigger in (ANTICIPATORY, REACTIVE):
+            extra = self._get_extra_anticipatory(
+                action, entity_id, expected_action_length
+            )
+        elif self._resched_trigger in (PROACTIVE):
+            extra = self._get_extra_proactive(action, entity_id, expected_action_length)
+        if extra <= 0:
+            if saved_cancel:
+                saved_cancel()
+            return
+        new_timer_delay = timedelta(seconds=extra * 0.95)
+        self._setup_overtime_check(event, new_timer_delay)
+
+        extra_dt = timedelta(seconds=extra)
+        await self._reschedule(entity_id, action_id, extra_dt)
+
+    async def _wait_and_handle_overtime(
+        self, event: Event, timer_delay: timedelta
+    ) -> None:
+        entity_id: Optional[str] = event.data.get(ATTR_ENTITY_ID)
+        action_id: Optional[str] = event.data.get(ATTR_ACTION_ID)
+        LOGGER.debug(
+            "Set up overtime check for %s on %s -- %s seconds later",
+            action_id,
+            entity_id,
+            timer_delay,
+        )
+        try:
+            await asyncio.sleep(timer_delay)
+        except asyncio.CancelledError:
+            return
+        self._handle_overtime(event)
+
+    def _setup_overtime_check(self, event: Event, timer_delay: timedelta) -> None:
+        """Set up the timer for the rescheduler."""
+        if self._resched_trigger in (REACTIVE):
+            return
         if isinstance(timer_delay, timedelta):
             timer_delay = timer_delay.total_seconds()
 
-        # if timer_delay <= 1:
-        #     return
-
-        def _get_extra_anticipatory() -> float:
-            action_complete = self._scheduler.is_action_complete(action, entity_id)
-            if action_complete:
-                return 0.0
-            extra = expected_action_length.total_seconds() * 0.1
-            return extra
-
-        def _get_extra_proactive() -> float:
-            rasc: RASCAbstraction = self._hass.data[DOMAIN]
-            action_length_estimate = generate_duration(
-                rasc.get_action_length_estimate(
-                    entity_id, action.service, action.transition
-                )
-            )
-            if action_length_estimate == expected_action_length:
-                return 0.0
-            extra = (action_length_estimate - expected_action_length).total_seconds()
-            return extra
-
-        # async def _handle_overtime(_: datetime) -> None:
-        async def _handle_overtime() -> None:
-            """Check if the action is about to go on overtime and adjust the schedule."""
-            try:
-                LOGGER.debug(
-                    "Set up overtime check for %s on %s -- %s seconds later",
-                    action_id,
-                    entity_id,
-                    timer_delay,
-                )
-                await asyncio.sleep(timer_delay)
-                LOGGER.debug("Handling overtime for %s on %s", action_id, entity_id)
-                saved_action_id, saved_cancel = self._timer_handles[entity_id]
-                if saved_action_id != action_id:
-                    raise ValueError(
-                        "Action ID mismatch for entity {} in the timer handle. saved: {}, new: {}".format(
-                            entity_id, saved_action_id, action_id
-                        )
-                    )
-                self._timer_handles[entity_id] = (None, None)
-
-                extra = 0.0
-                if self._resched_trigger in (ANTICIPATORY):
-                    extra = _get_extra_anticipatory()
-                elif self._resched_trigger in (PROACTIVE):
-                    extra = _get_extra_proactive()
-                if extra <= 0:
-                    if saved_cancel:
-                        saved_cancel()
-                    return
-                new_timer_delay = timedelta(seconds=extra * 0.95)
-                self._setup_overtime_check(event, new_timer_delay)
-
-                extra_dt = timedelta(seconds=extra)
-                await self._reschedule(entity_id, action_id, extra_dt)
-            except asyncio.CancelledError:
-                return
-
+        entity_id: Optional[str] = event.data.get(ATTR_ENTITY_ID)
+        action_id: Optional[str] = event.data.get(ATTR_ACTION_ID)
         LOGGER.info(
             "Setting up overtime check for %s on %s in %s seconds,\nat %s/%s for %s. timer handles: %s",
             action_id,
@@ -2651,9 +2691,9 @@ class RascalRescheduler:
             self._timer_handles,
         )
         output_all(LOGGER, lock_queues=self._scheduler.lineage_table.lock_queues)
-        # cancel = async_call_later(self._hass, timer_delay, _handle_overtime)
-        task = self._hass.async_create_task(_handle_overtime())
-        # self._timer_handles[entity_id] = (action_id, cancel)
+        task = self._hass.async_create_task(
+            self._wait_and_handle_overtime(event, timer_delay)
+        )
         self._timer_handles[entity_id] = (action_id, task.cancel)
         # self._hass.async_log_running_tasks()
 
@@ -2730,21 +2770,15 @@ class RascalRescheduler:
             return
         LOGGER.debug("Handling event in rescheduler %s", event)
         response = event.data.get(CONF_TYPE)
-        if response not in (RASC_START, RASC_COMPLETE):
+        if response not in (RASC_START, RASC_COMPLETE, RASC_INCOMPLETE):
             return
         action_id = event.data.get(ATTR_ACTION_ID)
         if not action_id:
             return
         if response == RASC_START:
-            action = self._scheduler.get_action(action_id)
-            if not action:
-                return
-            entity_id = event.data.get(ATTR_ENTITY_ID)
-            if not entity_id:
-                return
-            # timer_delay_sec = action.length(entity_id).total_seconds() * 0.95
-            # timer_delay = timedelta(seconds=timer_delay_sec)
-            timer_delay = action.stc[entity_id] * 0.95
+            timer_delay = self._init_timer_delay(event)
             self._setup_overtime_check(event, timer_delay)
         elif response == RASC_COMPLETE:
             await self._handle_undertime(event)
+        elif response == RASC_INCOMPLETE:
+            await self._handle_overtime(event)
