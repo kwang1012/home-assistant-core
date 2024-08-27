@@ -5,6 +5,7 @@ import copy
 from datetime import datetime, timedelta
 import heapq
 from itertools import product
+import json
 import time as t
 from typing import Optional
 
@@ -76,7 +77,6 @@ from .scheduler import (
 
 LOGGER = set_logger("rescheduler")
 
-
 class BaseRescheduler(TimeLineScheduler):
     """Base class for rescheduling resources.
 
@@ -87,16 +87,16 @@ class BaseRescheduler(TimeLineScheduler):
     def __init__(
         self,
         hass: HomeAssistant,
-        lineage_table: LineageTable,
-        serialization_order: Queue[str, RoutineInfo],
+        scheduler: RascalScheduler,
         resched_policy: str,
         optimal_sched_metric: str,
         routine_priority_policy: str,
     ) -> None:
         """Initialize the background rescheduler."""
-        super().__init__(hass, lineage_table, serialization_order, resched_policy)
+        super().__init__(hass, scheduler.lineage_table, scheduler.serialization_order, resched_policy)
         self._optimal_sched_metric = optimal_sched_metric
         self._routine_prioriy_policy = routine_priority_policy
+        self._scheduler = scheduler
 
     async def _move_device_schedule(
         self, entity_id: str, st_time: datetime, diff: timedelta
@@ -620,7 +620,14 @@ class BaseRescheduler(TimeLineScheduler):
                     entity_descheduled_actions[entity_id][routine_id].append(
                         descheduled_action.duplicate
                     )
-        LOGGER.error(f"{entity_descheduled_actions=}")
+        printed_entity_descheduled_actions = {}
+        for entity_id, routine_actions in entity_descheduled_actions.items():
+            printed_entity_descheduled_actions[entity_id] = {}
+            for routine_id, actions in routine_actions.items():
+                printed_entity_descheduled_actions[entity_id][routine_id] = [action.action_id for action in actions]
+
+
+        LOGGER.debug(f"entity_descheduled_actions={json.dumps(printed_entity_descheduled_actions, indent=2)}")
 
         actions_with_dependencies = dict[str, ActionEntity]()
         for routine_actions in entity_descheduled_actions.values():
@@ -812,6 +819,8 @@ class BaseRescheduler(TimeLineScheduler):
             datetime_to_string(action_st),
             target_entities,
         )
+        if action.is_waiting:
+            self._scheduler.cancel_action_task(action.action_id)
         for target_entity in target_entities:
             entity_id = get_entity_id_from_number(self._hass, target_entity)
             action_end = action_st + action.duration[entity_id]
@@ -826,6 +835,9 @@ class BaseRescheduler(TimeLineScheduler):
             )
 
             self.schedule_lock(action, (action_st, action_end), entity_id, lock_queues)
+
+        if action.is_waiting:
+            self._scheduler.create_action_task(action)
 
     def _output_wait_queues(
         self, wait_queues: dict[str, list[tuple[timedelta, ActionEntity]]]
@@ -961,6 +973,7 @@ class BaseRescheduler(TimeLineScheduler):
 
             LOGGER.debug("shortest action: %s", shortest_action)
             action_st = self._find_action_start_after(shortest_action, next_slot_st)
+            action_st = max(action_st, datetime.now())
             self.reschedule_all_action(
                 shortest_action,
                 action_st,
@@ -969,8 +982,6 @@ class BaseRescheduler(TimeLineScheduler):
             )
 
             # remove the chosen action from the descheduled actions
-            # if shortest_action.action_id.startswith("1715721247625") and shortest_action.action_id.endswith(".11"):
-            #     LOGGER.debug(f"            HOUSTON WE HAVE A PROBLEM")
             if shortest_action.action_id in descheduled_actions:
                 del descheduled_actions[shortest_action.action_id]
             visited.add(shortest_action)
@@ -2314,8 +2325,7 @@ class RascalRescheduler:
         self._do_comparision: bool = config[DO_COMPARISON]
         self._rescheduler = BaseRescheduler(
             self._hass,
-            scheduler.lineage_table,
-            scheduler.serialization_order,
+            scheduler,
             self._resched_policy,
             self._optimal_sched_metric,
             self._routine_priority,
@@ -2486,10 +2496,6 @@ class RascalRescheduler:
                         immutable_serialization_order, affected_actions
                     )
                 )
-                LOGGER.info(
-                    "Descheduled actions after serialization order: %s",
-                    descheduled_actions,
-                )
             else:
                 descheduled_actions = affected_actions
             if self._resched_policy in (SJFWO, SJFW):
@@ -2522,6 +2528,7 @@ class RascalRescheduler:
                     immutable_serialization_order,
                     metrics,
                 )
+
             elif self._resched_policy in (OPTIMALW, OPTIMALWO):
                 new_lt, new_so = self._rescheduler.optimal(
                     descheduled_actions,
@@ -2701,6 +2708,7 @@ class RascalRescheduler:
         if not entity_id or not action_id:
             raise ValueError("Entity ID or action ID is missing in the event.")
         self._cancel_overtime_check(event)
+        LOGGER.info("diff: %f", diff.total_seconds())
         if diff.total_seconds() >= -MIN_RESCHEDULE_TIME:
             LOGGER.info("Undertime too low, not rescheduling")
             return

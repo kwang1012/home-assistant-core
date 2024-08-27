@@ -329,6 +329,7 @@ class ActionEntity:
         self._stop = asyncio.Event()
         self._attr_is_end_node = is_end_node
         self.start_requested: bool = False
+        self.is_waiting: bool = False
 
     def __repr__(self) -> str:
         """Return the string representation of the action entity."""
@@ -394,9 +395,13 @@ class ActionEntity:
             action=self.action,
             action_id=self._action_id,
             duration=self.duration,
+            context=self.context,
+            variables=self.variables,
+            logger=self._logger,
         )
         new_entity.parents = self.parents
         new_entity.children = self.children
+        new_entity.is_waiting = self.is_waiting
         return new_entity
 
     @property
@@ -455,7 +460,7 @@ class ActionEntity:
         msg = f"%s: {msg}"
         args = (str(self.action_id), *args)
 
-        if self._logger is not None:
+        if self._logger:
             if level == _LOG_EXCEPTION:
                 self._logger.exception(msg, *args, **kwargs)
             else:

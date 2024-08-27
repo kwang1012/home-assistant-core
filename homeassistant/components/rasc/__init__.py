@@ -212,8 +212,6 @@ CONFIG_SCHEMA = vol.Schema(
     extra=vol.ALLOW_EXTRA,
 )
 
-LOGGER.level = logging.DEBUG
-
 
 def run_experiments(hass: HomeAssistant, rasc: RASCAbstraction):
     """Run experiments."""
