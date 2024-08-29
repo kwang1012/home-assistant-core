@@ -1886,6 +1886,7 @@ class TimeLineScheduler(BaseScheduler):
         )
 
         conflict = None
+        cur_preset = cur_postset = set[str]()
         for slot_start, slot_end in free_slots[entity_id].items():
             # Check if the gap is available
             if slot_end and slot_end <= now:

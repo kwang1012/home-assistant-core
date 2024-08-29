@@ -2349,7 +2349,7 @@ class RascalRescheduler:
             self._mis = {
                 entity_id: 0.0 for entity_id in scheduler._lineage_table.lock_queues
             }
-        # self._reschedule_lock = asyncio.Lock()
+        self._reschedule_lock = asyncio.Lock()
 
     def _calc_mi(self, event: Event) -> float:  # not used so far
         """Calculate the entity's new Mi based on the new event."""
@@ -2415,147 +2415,147 @@ class RascalRescheduler:
         self, entity_id: str, action_id: str, diff: timedelta
     ) -> None:
         """Reschedule the entities based on the rescheduling policy."""
-        # async with self._reschedule_lock:
-        start_time = t.time()
+        async with self._reschedule_lock:
+            start_time = t.time()
 
-        # Save the old schedule
-        old_lt = self._scheduler.lineage_table.duplicate
-        old_so = self._scheduler.duplicate_serialization_order
-        self._scheduler.metrics.inc_version()
+            # Save the old schedule
+            old_lt = self._scheduler.lineage_table.duplicate
+            old_so = self._scheduler.duplicate_serialization_order
+            self._scheduler.metrics.inc_version()
 
-        if entity_id not in old_lt.lock_queues:
-            raise ValueError("Entity %s has no schedule." % entity_id)
-        if action_id not in old_lt.lock_queues[entity_id]:
-            raise ValueError(
-                f"Action {action_id} has not been scheduled on entity {entity_id}."
-            )
-        action_lock = old_lt.lock_queues[entity_id][action_id]
-        if not action_lock:
-            raise ValueError(
-                "Action {}'s schedule information on entity {} is missing.".format(
-                    action_id, entity_id
+            if entity_id not in old_lt.lock_queues:
+                raise ValueError("Entity %s has no schedule." % entity_id)
+            if action_id not in old_lt.lock_queues[entity_id]:
+                raise ValueError(
+                    f"Action {action_id} has not been scheduled on entity {entity_id}."
                 )
-            )
-
-        st_time, old_end_time = action_lock.time_range
-        new_end_time = old_end_time + diff
-        metrics = ScheduleMetrics(sm=self._scheduler.metrics)
-        metrics.record_action_end(new_end_time, entity_id, action_id)
-        action_lock.move_to(st_time, new_end_time)
-        if diff.total_seconds() < 0:
-            # return part of the free slots
-            free_slots = old_lt.free_slots[entity_id]
-            found = False
-            for slot_st, slot_end in free_slots.items():
-                # if there is already a slot that starts at the old end time, merge the slots
-                if slot_st == old_end_time:
-                    free_slots.insert_before(slot_st, new_end_time, slot_end)
-                    free_slots.pop(slot_st)
-                    found = True
-                    break
-            if not found:
-                free_slots[new_end_time] = old_end_time
-
-        # Update the rescheduler's schedule to the current one
-        self._rescheduler.lineage_table = old_lt.duplicate
-        self._rescheduler.serialization_order = (
-            self._scheduler.duplicate_serialization_order
-        )
-        new_lt = None
-        new_so = self._rescheduler.serialization_order
-
-        if self._resched_policy in (RV, EARLY_START) and diff.total_seconds() > 0:
-            success = await self._move_device_schedules(old_end_time, diff)
-            if not success:
-                raise ValueError("Failed to move device schedules.")
-
-        if self._resched_policy in (RV):
-            new_lt = self._rescheduler.RV(new_end_time, metrics)
-        elif self._resched_policy in (EARLY_START):
-            new_lt = self._rescheduler.early_start()
-        elif self._resched_policy in (SJFWO, SJFW, OPTIMALW, OPTIMALWO):
-            affected_actions = self._rescheduler.affected_actions_after_len_diff(
-                entity_id, action_id, min(new_end_time, old_end_time)
-            )
-            if not affected_actions:
-                LOGGER.info("No affected source actions found, nothing to reschedule")
-                self._apply_schedule(old_lt, old_so)
-                return
-            LOGGER.info("Affected actions: %s", affected_actions)
-
-            serializability = self._resched_policy in (SJFW, OPTIMALW)
-            immutable_serialization_order = None
-            if serializability:
-                immutable_serialization_order = (
-                    self._rescheduler.immutable_serialization_order(old_end_time)
-                )
-
-                LOGGER.info(
-                    "Immutable serialization order: %s", immutable_serialization_order
-                )
-            self._rescheduler.deschedule_affected_actions(set(affected_actions.keys()))
-            if serializability and immutable_serialization_order:
-                descheduled_actions = (
-                    self._rescheduler.apply_serialization_order_dependencies(
-                        immutable_serialization_order, affected_actions
+            action_lock = old_lt.lock_queues[entity_id][action_id]
+            if not action_lock:
+                raise ValueError(
+                    "Action {}'s schedule information on entity {} is missing.".format(
+                        action_id, entity_id
                     )
                 )
-            else:
-                descheduled_actions = affected_actions
-            if self._resched_policy in (SJFWO, SJFW):
-                if self._do_comparision:
-                    # compare to optimal
-                    self._rescheduler.optimal(
-                        descheduled_actions,
-                        serializability,
-                        immutable_serialization_order if serializability else None,
-                        metrics,
-                    )
+
+            st_time, old_end_time = action_lock.time_range
+            new_end_time = old_end_time + diff
+            metrics = ScheduleMetrics(sm=self._scheduler.metrics)
+            metrics.record_action_end(new_end_time, entity_id, action_id)
+            action_lock.move_to(st_time, new_end_time)
+            if diff.total_seconds() < 0:
+                # return part of the free slots
+                free_slots = old_lt.free_slots[entity_id]
+                found = False
+                for slot_st, slot_end in free_slots.items():
+                    # if there is already a slot that starts at the old end time, merge the slots
+                    if slot_st == old_end_time:
+                        free_slots.insert_before(slot_st, new_end_time, slot_end)
+                        free_slots.pop(slot_st)
+                        found = True
+                        break
+                if not found:
+                    free_slots[new_end_time] = old_end_time
+
+            # Update the rescheduler's schedule to the current one
+            self._rescheduler.lineage_table = old_lt.duplicate
+            self._rescheduler.serialization_order = (
+                self._scheduler.duplicate_serialization_order
+            )
+            new_lt = None
+            new_so = self._rescheduler.serialization_order
+
+            if self._resched_policy in (RV, EARLY_START) and diff.total_seconds() > 0:
+                success = await self._move_device_schedules(old_end_time, diff)
+                if not success:
+                    raise ValueError("Failed to move device schedules.")
+
+            if self._resched_policy in (RV):
+                new_lt = self._rescheduler.RV(new_end_time, metrics)
+            elif self._resched_policy in (EARLY_START):
+                new_lt = self._rescheduler.early_start()
+            elif self._resched_policy in (SJFWO, SJFW, OPTIMALW, OPTIMALWO):
+                affected_actions = self._rescheduler.affected_actions_after_len_diff(
+                    entity_id, action_id, min(new_end_time, old_end_time)
+                )
+                if not affected_actions:
+                    LOGGER.info("No affected source actions found, nothing to reschedule")
                     self._apply_schedule(old_lt, old_so)
+                    return
+                LOGGER.info("Affected actions: %s", affected_actions)
 
-                    # compare to RV
-                    if self._resched_policy in (SJFW):
-                        success = await self._move_device_schedules(old_end_time, diff)
-                        if not success:
-                            raise ValueError("Failed to move device schedules.")
-                        self._rescheduler.RV(new_end_time, metrics)
+                serializability = self._resched_policy in (SJFW, OPTIMALW)
+                immutable_serialization_order = None
+                if serializability:
+                    immutable_serialization_order = (
+                        self._rescheduler.immutable_serialization_order(old_end_time)
+                    )
+
+                    LOGGER.info(
+                        "Immutable serialization order: %s", immutable_serialization_order
+                    )
+                self._rescheduler.deschedule_affected_actions(set(affected_actions.keys()))
+                if serializability and immutable_serialization_order:
+                    descheduled_actions = (
+                        self._rescheduler.apply_serialization_order_dependencies(
+                            immutable_serialization_order, affected_actions
+                        )
+                    )
+                else:
+                    descheduled_actions = affected_actions
+                if self._resched_policy in (SJFWO, SJFW):
+                    if self._do_comparision:
+                        # compare to optimal
+                        self._rescheduler.optimal(
+                            descheduled_actions,
+                            serializability,
+                            immutable_serialization_order if serializability else None,
+                            metrics,
+                        )
                         self._apply_schedule(old_lt, old_so)
 
-                    # output_lock_queues(old_lt.lock_queues)
-                    self._rescheduler.deschedule_affected_actions(
-                        set(affected_actions.keys())
+                        # compare to RV
+                        if self._resched_policy in (SJFW):
+                            success = await self._move_device_schedules(old_end_time, diff)
+                            if not success:
+                                raise ValueError("Failed to move device schedules.")
+                            self._rescheduler.RV(new_end_time, metrics)
+                            self._apply_schedule(old_lt, old_so)
+
+                        # output_lock_queues(old_lt.lock_queues)
+                        self._rescheduler.deschedule_affected_actions(
+                            set(affected_actions.keys())
+                        )
+
+                    new_lt, new_so = self._rescheduler.sjf(
+                        descheduled_actions,
+                        serializability,
+                        immutable_serialization_order,
+                        metrics,
                     )
 
-                new_lt, new_so = self._rescheduler.sjf(
-                    descheduled_actions,
-                    serializability,
-                    immutable_serialization_order,
-                    metrics,
-                )
-
-            elif self._resched_policy in (OPTIMALW, OPTIMALWO):
-                new_lt, new_so = self._rescheduler.optimal(
-                    descheduled_actions,
-                    serializability,
-                    immutable_serialization_order,
-                    metrics,
-                )
-        if not new_lt:
-            self._apply_schedule(old_lt, old_so)
-            return
-        LOGGER.info("New schedule created at %s", datetime.now())
-        output_all(
-            LOGGER,
-            lock_queues=new_lt.lock_queues,
-            free_slots=new_lt.free_slots,
-            serialization_order=new_so,
-        )
-        self._apply_schedule(new_lt, new_so)
-        end_time = t.time()
-        self._hass.bus.async_fire(
-            "reschedule_event",
-            {"from": start_time, "to": end_time, "diff": diff.total_seconds()},
-        )
+                elif self._resched_policy in (OPTIMALW, OPTIMALWO):
+                    new_lt, new_so = self._rescheduler.optimal(
+                        descheduled_actions,
+                        serializability,
+                        immutable_serialization_order,
+                        metrics,
+                    )
+            if not new_lt:
+                self._apply_schedule(old_lt, old_so)
+                return
+            LOGGER.info("New schedule created at %s", datetime.now())
+            output_all(
+                LOGGER,
+                lock_queues=new_lt.lock_queues,
+                free_slots=new_lt.free_slots,
+                serialization_order=new_so,
+            )
+            self._apply_schedule(new_lt, new_so)
+            end_time = t.time()
+            self._hass.bus.async_fire(
+                "reschedule_event",
+                {"from": start_time, "to": end_time, "diff": diff.total_seconds()},
+            )
 
     def _apply_schedule(
         self,
@@ -2582,7 +2582,7 @@ class RascalRescheduler:
             return
         # timer_delay_sec = action.length(entity_id).total_seconds() * 0.95
         # timer_delay = timedelta(seconds=timer_delay_sec)
-        timer_delay = action.stc[entity_id] * 0.95
+        timer_delay = max(timedelta(seconds=0), min(action.stc[entity_id] * 0.95, action.stc[entity_id] - timedelta(seconds=0.1)))
         return timer_delay
 
     def _get_extra_anticipatory(
@@ -2642,6 +2642,8 @@ class RascalRescheduler:
 
         if entity_id in self._timer_handles:
             saved_action_id, saved_cancel = self._timer_handles[entity_id]
+            if saved_action_id is None:
+                return
             if saved_action_id != action_id:
                 raise ValueError(
                     "Action ID mismatch for entity {} in the timer handle. saved: {}, new: {}".format(
@@ -2684,7 +2686,7 @@ class RascalRescheduler:
             await asyncio.sleep(timer_delay)
         except asyncio.CancelledError:
             return
-        self._handle_overtime(event)
+        await self._handle_overtime(event)
 
     def _setup_overtime_check(self, event: Event, timer_delay: timedelta) -> None:
         """Set up the timer for the rescheduler."""

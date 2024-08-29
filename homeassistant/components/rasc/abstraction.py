@@ -114,10 +114,10 @@ class RASCAbstraction:
             )
             return 0
         if state.compl_time_estimation == 0:  # 0 if there is no progress
-            LOGGER.debug(f"{self.config[state.entity.entity_id][RASC_WORST_Q]=}")
+            LOGGER.debug(f"{self.config.get(state.entity.entity_id, {}).get(RASC_WORST_Q, 2.0)=}")
             return (
                 time.time()
-                + self.config[state.entity.entity_id][RASC_WORST_Q]
+                + self.config.get(state.entity.entity_id, {}).get(RASC_WORST_Q, 2.0)
                 - state.start_time
             )
         return state.compl_time_estimation - state.start_time
@@ -146,7 +146,7 @@ class RASCAbstraction:
             else:  # part == "rts"
                 history = histories[key].st_history
             if not history:
-                return transition
+                return max(transition, 1)
             dist = get_best_distribution(history)
             estimations = {
                 MEAN_ESTIMATION: dist.mean(),
@@ -481,6 +481,7 @@ class StateDetector:
 
     def compl_time_estimation(self) -> float:
         """Return completion time estimation."""
+        max_predicted_time = 0
         for key, progress in self._progress.items():
             if len({p[0] for p in progress}) > 2:
                 x = [item[0] for item in progress]
