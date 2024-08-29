@@ -113,6 +113,13 @@ class RASCAbstraction:
                 "Start_time must be provided for %s: %s", state.entity.entity_id, state
             )
             return 0
+        if state.compl_time_estimation == 0:  # 0 if there is no progress
+            LOGGER.debug(f"{self.config[state.entity.entity_id][RASC_WORST_Q]=}")
+            return (
+                time.time()
+                + self.config[state.entity.entity_id][RASC_WORST_Q]
+                - state.start_time
+            )
         return state.compl_time_estimation - state.start_time
 
     def get_action_length_estimate(
@@ -474,7 +481,6 @@ class StateDetector:
 
     def compl_time_estimation(self) -> float:
         """Return completion time estimation."""
-        max_predicted_time = 0
         for key, progress in self._progress.items():
             if len({p[0] for p in progress}) > 2:
                 x = [item[0] for item in progress]

@@ -5,7 +5,6 @@ import copy
 from datetime import datetime, timedelta
 import heapq
 from itertools import product
-import json
 import time as t
 from typing import Optional
 
@@ -414,15 +413,15 @@ class BaseRescheduler(TimeLineScheduler):
         # the actions in routines serialized after this action's routine are affected
         # adding current action to detect all actions on the same entity as well
         routines_after = self._routines_serialized_after(routine_id)
-        LOGGER.debug("Routines serialized after %s: %s", routine_id, routines_after)
+        # LOGGER.debug("Routines serialized after %s: %s", routine_id, routines_after)
         for routine_after_id in routines_after:
             routine_after_actions = self._routine_actions_after(routine_after_id, time)
-            LOGGER.debug(
-                "Routine %s's actions after %s: %s",
-                routine_after_id,
-                time,
-                routine_after_actions,
-            )
+            # LOGGER.debug(
+            #     "Routine %s's actions after %s: %s",
+            #     routine_after_id,
+            #     time,
+            #     routine_after_actions,
+            # )
             for (
                 routine_after_action_id,
                 routine_after_action,
@@ -547,11 +546,11 @@ class BaseRescheduler(TimeLineScheduler):
                             action_id, entity_id
                         )
                     )
-                start = (
-                    datetime_to_string(action_lock.start_time) if action_lock else None
-                )
-                free = datetime_to_string(free_st_time) if free_st_time else None
-                LOGGER.debug(f"{action_id=}, {start=}, {free=}")
+                # start = (
+                #     datetime_to_string(action_lock.start_time) if action_lock else None
+                # )
+                # free = datetime_to_string(free_st_time) if free_st_time else None
+                # LOGGER.debug(f"{action_id=}, {start=}, {free=}")
                 if not free_st_time:
                     # while a source action is not found, skip the action
                     if action_id not in affected_action_ids:
@@ -632,9 +631,7 @@ class BaseRescheduler(TimeLineScheduler):
                     action.action_id for action in actions
                 ]
 
-        LOGGER.debug(
-            f"entity_descheduled_actions={json.dumps(printed_entity_descheduled_actions, indent=2)}"
-        )
+        # LOGGER.debug(f"entity_descheduled_actions={json.dumps(printed_entity_descheduled_actions, indent=2)}")
 
         actions_with_dependencies = dict[str, ActionEntity]()
         for routine_actions in entity_descheduled_actions.values():
@@ -850,12 +847,12 @@ class BaseRescheduler(TimeLineScheduler):
         self, wait_queues: dict[str, list[tuple[timedelta, ActionEntity]]]
     ) -> None:
         """Output the wait queues."""
-        for entity_id, wait_queue in wait_queues.items():
+        for _entity_id, wait_queue in wait_queues.items():
             wait_queue_strs = [
                 f"{length.total_seconds()}: {action}" for length, action in wait_queue
             ]
-            wait_queue_str = f"{' | '.join(wait_queue_strs)}"
-            LOGGER.debug("Entity %s's wait queue: %s", entity_id, wait_queue_str)
+            f"{' | '.join(wait_queue_strs)}"
+            # LOGGER.debug("Entity %s's wait queue: %s", entity_id, wait_queue_str)
 
     def sjf(  # noqa: C901
         self,
@@ -2612,6 +2609,11 @@ class RascalRescheduler:
                 entity_id, action.service, action.transition
             )
         )
+        LOGGER.debug(
+            "Action length estimate: %s, previous length estimate: %s",
+            action_length_estimate,
+            expected_action_length,
+        )
         if action_length_estimate == expected_action_length:
             return 0.0
         extra = (action_length_estimate - expected_action_length).total_seconds()
@@ -2715,6 +2717,12 @@ class RascalRescheduler:
         entity_id = str(event.data.get(ATTR_ENTITY_ID))
         action_id = str(event.data.get(ATTR_ACTION_ID))
         saved_action_id, saved_cancel = self._timer_handles[entity_id]
+        LOGGER.debug("Canceled overtime check for %s on %s", action_id, entity_id)
+
+        if saved_action_id is None:
+            # has already been cancelled
+            return
+
         if saved_action_id != action_id:
             raise ValueError(
                 "Action ID mismatch for entity {} in the timer handle. saved: {}, new: {}".format(
@@ -2724,7 +2732,6 @@ class RascalRescheduler:
         if saved_cancel:
             saved_cancel()
             self._timer_handles[entity_id] = (None, None)
-            LOGGER.debug("Canceled overtime check for %s on %s", action_id, entity_id)
 
     def _action_length_diff(self, event: Event) -> timedelta:
         """Calculate the difference in action length."""

@@ -82,8 +82,6 @@ CONF_END_VIRTUAL_NODE = "end_virtual_node"
 TIMEOUT = 3000  # millisecond
 
 _LOGGER = set_logger()
-_LOGGER.level = logging.DEBUG
-
 
 def create_routine(
     hass: HomeAssistant,
@@ -3719,7 +3717,6 @@ class RascalScheduler(BaseScheduler):
                 f"Action {action_id} has not been scheduled on entity {entity_id}."
             )
 
-        _LOGGER.debug(f"{self._lineage_table.lock_queues[entity_id]=}")
         next_action = self._lineage_table.lock_queues[entity_id].next(action_id)
 
         if not next_action:

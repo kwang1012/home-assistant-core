@@ -258,6 +258,8 @@ class VirtualLight(VirtualEntity, LightEntity):
                 and self._attr_supported_features & LightEntityFeature.TRANSITION
             ):
                 if self._task is not None:
+                    if not self._task.done():
+                        _LOGGER.error("Previous task is not done")
                     self._task.cancel()
                 self._task = self.hass.async_create_task(
                     self._async_update_brightness(brightness, transition)
