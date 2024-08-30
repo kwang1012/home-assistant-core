@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import datetime
-import logging
 import os
 import shutil
 
@@ -13,6 +12,7 @@ from homeassistant.components.climate import SERVICE_SET_TEMPERATURE
 from homeassistant.const import (
     ACTION_LENGTH_ESTIMATION,
     ANTICIPATORY,
+    CONF_ACTION_START_METHOD,
     CONF_OPTIMAL_SCHEDULE_METRIC,
     CONF_RECORD_RESULTS,
     CONF_RESCHEDULING_POLICY,
@@ -69,6 +69,8 @@ from homeassistant.const import (
     SHORTEST,
     SJFW,
     SJFWO,
+    START_EVENT_BASED,
+    START_TIME_BASED,
     TIMELINE,
 )
 from homeassistant.core import HomeAssistant
@@ -137,8 +139,9 @@ supported_action_length_estimations = [
     P80_ESTIMATION,
     P90_ESTIMATION,
     P95_ESTIMATION,
-    P99_ESTIMATION
+    P99_ESTIMATION,
 ]
+supported_start_methods = [START_EVENT_BASED, START_TIME_BASED]
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -176,12 +179,6 @@ CONFIG_SCHEMA = vol.Schema(
                 ),
                 vol.Optional("mthresh", default=1.0): cv.positive_float,  # seconds
                 vol.Optional("mithresh", default=2.0): cv.positive_float,  # seconds
-                # vol.Optional(RESCHEDULING_ESTIMATION, default=True): cv.boolean,
-                # vol.Optional(RESCHEDULING_ACCURACY, default=RESCHEDULE_ALL): vol.In(
-                #     supported_rescheduling_accuracies
-                # ),
-                # vol.Optional("mthresh", default=1.0): cv.positive_float,  # seconds
-                # vol.Optional("mithresh", default=2.0): cv.positive_float,  # seconds
                 **{
                     vol.Optional(platform.value): vol.Schema(
                         {
@@ -206,6 +203,9 @@ CONFIG_SCHEMA = vol.Schema(
                         ),
                     }
                 ),
+                vol.Optional(
+                    CONF_ACTION_START_METHOD, default=START_EVENT_BASED
+                ): vol.In(supported_start_methods),
             }
         )
     },

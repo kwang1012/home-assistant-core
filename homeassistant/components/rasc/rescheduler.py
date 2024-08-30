@@ -2478,7 +2478,9 @@ class RascalRescheduler:
                     entity_id, action_id, min(new_end_time, old_end_time)
                 )
                 if not affected_actions:
-                    LOGGER.info("No affected source actions found, nothing to reschedule")
+                    LOGGER.info(
+                        "No affected source actions found, nothing to reschedule"
+                    )
                     self._apply_schedule(old_lt, old_so)
                     return
                 LOGGER.info("Affected actions: %s", affected_actions)
@@ -2491,9 +2493,12 @@ class RascalRescheduler:
                     )
 
                     LOGGER.info(
-                        "Immutable serialization order: %s", immutable_serialization_order
+                        "Immutable serialization order: %s",
+                        immutable_serialization_order,
                     )
-                self._rescheduler.deschedule_affected_actions(set(affected_actions.keys()))
+                self._rescheduler.deschedule_affected_actions(
+                    set(affected_actions.keys())
+                )
                 if serializability and immutable_serialization_order:
                     descheduled_actions = (
                         self._rescheduler.apply_serialization_order_dependencies(
@@ -2515,7 +2520,9 @@ class RascalRescheduler:
 
                         # compare to RV
                         if self._resched_policy in (SJFW):
-                            success = await self._move_device_schedules(old_end_time, diff)
+                            success = await self._move_device_schedules(
+                                old_end_time, diff
+                            )
                             if not success:
                                 raise ValueError("Failed to move device schedules.")
                             self._rescheduler.RV(new_end_time, metrics)
@@ -2572,7 +2579,7 @@ class RascalRescheduler:
                 self._rescheduler.serialization_order[routine_id] = routine_info
                 self._scheduler.serialization_order[routine_id] = routine_info
 
-    def _init_timer_delay(self, event: Event) -> float:
+    def _init_timer_delay(self, event: Event) -> timedelta:
         entity_id: Optional[str] = event.data.get(ATTR_ENTITY_ID)
         action_id: Optional[str] = event.data.get(ATTR_ACTION_ID)
         action = self._scheduler.get_action(action_id)
@@ -2582,7 +2589,13 @@ class RascalRescheduler:
             return
         # timer_delay_sec = action.length(entity_id).total_seconds() * 0.95
         # timer_delay = timedelta(seconds=timer_delay_sec)
-        timer_delay = max(timedelta(seconds=0), min(action.stc[entity_id] * 0.95, action.stc[entity_id] - timedelta(seconds=0.1)))
+        timer_delay = max(
+            timedelta(seconds=0),
+            min(
+                action.stc[entity_id] * 0.95,
+                action.stc[entity_id] - timedelta(seconds=0.1),
+            ),
+        )
         return timer_delay
 
     def _get_extra_anticipatory(
@@ -2626,6 +2639,10 @@ class RascalRescheduler:
         action_id: Optional[str] = event.data.get(ATTR_ACTION_ID)
         if not action_id:
             raise ValueError("Action ID is missing in the event.")
+        routine_id = get_routine_id(action_id)
+        if routine_id not in self._scheduler.serialization_order:
+            # This routine has completed execution already
+            return
         action = self._scheduler.get_action(action_id)
         if not action:
             return
@@ -2773,7 +2790,7 @@ class RascalRescheduler:
         if not entity_id or not action_id:
             raise ValueError("Entity ID or action ID is missing in the event.")
         self._cancel_overtime_check(event)
-        LOGGER.info("diff: %f", diff.total_seconds())
+        LOGGER.info("Diff: %f", diff.total_seconds())
         if diff.total_seconds() >= -MIN_RESCHEDULE_TIME:
             LOGGER.info("Undertime too low, not rescheduling")
             return

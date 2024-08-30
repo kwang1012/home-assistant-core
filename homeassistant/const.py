@@ -1307,3 +1307,7 @@ P90_ESTIMATION: Final = "p90"
 P95_ESTIMATION: Final = "p95"
 P99_ESTIMATION: Final = "p99"
 DO_COMPARISON: Final = "do_comparison"
+
+CONF_ACTION_START_METHOD: Final = "action_start_method"
+START_EVENT_BASED: Final = "event"
+START_TIME_BASED: Final = "time"

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from homeassistant.const import (
     ATTR_ACTION_ID,
     ATTR_ENTITY_ID,
+    CONF_ACTION_START_METHOD,
     CONF_CHOOSE,
     CONF_CONDITION,
     CONF_DELAY,
@@ -44,6 +45,8 @@ from homeassistant.const import (
     RASC_RESPONSE,
     RASC_SCHEDULED,
     RASC_START,
+    START_EVENT_BASED,
+    START_TIME_BASED,
     TIMELINE,
 )
 from homeassistant.core import Event, HomeAssistant
@@ -63,7 +66,7 @@ from homeassistant.helpers.template import device_entities
 from homeassistant.helpers.typing import ConfigType
 
 from .abstraction import RASCAbstraction
-from .const import CONF_TRANSITION, DOMAIN, MAX_SCHEDULE_TIME
+from .const import CONF_TRANSITION, DOMAIN  # , MAX_SCHEDULE_TIME
 from .entity import (
     ActionEntity,
     BaseRoutineEntity,
@@ -82,6 +85,8 @@ CONF_END_VIRTUAL_NODE = "end_virtual_node"
 TIMEOUT = 3000  # millisecond
 
 _LOGGER = set_logger()
+_LOGGER.setLevel(logging.INFO)
+
 
 def create_routine(
     hass: HomeAssistant,
@@ -2120,7 +2125,7 @@ class TimeLineScheduler(BaseScheduler):
         start = time.time()
 
         # Remove time slots before now
-        next_end_time = now + generate_duration(MAX_SCHEDULE_TIME)
+        next_end_time = now  # + generate_duration(MAX_SCHEDULE_TIME)
         self.remove_time_slots_before_now(next_end_time, self._lineage_table.free_slots)
 
         # Deep copy the free slots
@@ -2360,6 +2365,7 @@ class RascalScheduler(BaseScheduler):
         self._record_results = config[CONF_RECORD_RESULTS]
         if self._record_results:
             self._result_dir = result_dir
+        self._action_start_method = config[CONF_ACTION_START_METHOD]
         self._hass.bus.async_listen(RASC_RESPONSE, self.handle_event)
 
         self._action_tasks: dict[str, asyncio.Task] = {}
@@ -3021,7 +3027,10 @@ class RascalScheduler(BaseScheduler):
         # Start the action that doesn't have the parents
         for action_entity in list(routine.actions.values())[:-1]:
             if not action_entity.all_parents:
-                self.create_action_task(action_entity)
+                if self._action_start_method == START_TIME_BASED:
+                    self.create_action_task(action_entity)
+                elif self._action_start_method == START_EVENT_BASED:
+                    self._attempt_start_action(action_entity)
 
     def cancel_action_task(self, action_id: str) -> None:
         """Cancel the task for the given action."""
@@ -3039,7 +3048,7 @@ class RascalScheduler(BaseScheduler):
         self._action_tasks[action.action_id] = task
 
     async def _start_action(self, action: ActionEntity) -> None:
-        """Start the given action."""
+        """Start the given action if action start method is time-based."""
         _LOGGER.info("Try to start the action %s", action.action_id)
 
         target_entities = get_target_entities(self._hass, action.action)
@@ -3129,6 +3138,44 @@ class RascalScheduler(BaseScheduler):
         )
         self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
 
+    def _attempt_start_action(self, action: ActionEntity) -> None:
+        """Start the given action if action start method is event-based."""
+        _LOGGER.debug("Try to start the action %s", action.action_id)
+
+        target_entities = get_target_entities(self._hass, action.action)
+        if not target_entities:
+            raise ValueError(f"Action {action.action_id} has no target entities.")
+        random_entity_id = target_entities[0]
+        if random_entity_id not in self._lineage_table.lock_queues:
+            raise ValueError("Entity %s has no schedule." % random_entity_id)
+        if action.action_id not in self._lineage_table.lock_queues[random_entity_id]:
+            return
+        action_lock = self.get_action_info(action.action_id, random_entity_id)
+        if not action_lock:
+            raise ValueError(
+                "Action {}'s schedule information on entity {} is missing.".format(
+                    action.action_id, random_entity_id
+                )
+            )
+
+        with action.start_lock:
+            if action.start_requested:
+                # _LOGGER.warning("Action %s has already started", action.action_id)
+                return
+
+            if not self._is_action_ready(action):
+                _LOGGER.debug("Action %s is not ready to start", action.action_id)
+                return
+
+            _LOGGER.info(
+                "Start action %s at %s vs scheduled start time: %s",
+                action.action_id,
+                datetime.now(),
+                action_lock.start_time,
+            )
+            self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
+            action.start_requested = True
+
     def _is_action_ready(self, action: ActionEntity) -> bool:
         """Check if the given action acquire all the associated locks to get executed."""
 
@@ -3205,6 +3252,15 @@ class RascalScheduler(BaseScheduler):
                 )
                 return False
 
+        if self._action_start_method == START_EVENT_BASED:
+            # Check if the previous actions on the common entities are over
+            if not self._are_prev_actions_over(action):
+                return False
+
+            # Check if the parent dependencies from the same routine are satisfied
+            if not self._are_parent_deps_satisfied(action):
+                return False
+
         return True
 
     def _are_prev_actions_over(self, action: ActionEntity) -> bool:
@@ -3228,6 +3284,7 @@ class RascalScheduler(BaseScheduler):
         async with self._handle_event_lock:
             if self._reschedule_handler is not None:
                 await self._reschedule_handler(event)
+                self._start_ready_actions()
 
             _LOGGER.debug("Handling event %s", event)
 
@@ -3290,7 +3347,7 @@ class RascalScheduler(BaseScheduler):
                     await action.async_delay_step()
 
                 # Emulate action's duration
-                await self._async_wait_until(action_id, entity_id)
+                # await self._async_wait_until(action_id, entity_id)
 
                 # if entity_id not in self._lineage_table.lock_queues:
                 #     raise ValueError("Entity %s has no schedule." % entity_id)
@@ -3332,7 +3389,7 @@ class RascalScheduler(BaseScheduler):
                         self._start_ready_routines_jit(entity_id)
 
                 elif self._scheduling_policy == TIMELINE:
-                    if not self._return_lock(action_id, entity_id):
+                    if self._action_start_method == START_TIME_BASED:
                         self._start_ready_routines_tl(action_id, entity_id)
 
                 # Check if the action is completed on all entities
@@ -3347,6 +3404,19 @@ class RascalScheduler(BaseScheduler):
 
             else:
                 output_all(_LOGGER, lock_queues=self._lineage_table.lock_queues)
+
+    def _start_ready_actions(self) -> None:
+        """Start the ready actions."""
+        for lock_queue in self._lineage_table.lock_queues.values():
+            _, action_lock = lock_queue.top()
+            if action_lock is None:
+                continue
+            action = action_lock.action
+            with action.start_lock:
+                if action.start_requested:
+                    continue
+            if self._is_action_ready(action):
+                self._attempt_start_action(action)
 
     def _return_lock(self, action_id: str, entity_id: str) -> bool:
         """Check if the given action returns the lock."""
@@ -3397,7 +3467,7 @@ class RascalScheduler(BaseScheduler):
             lock_queues=self._lineage_table.lock_queues,
         )
 
-        if self._condition_check(cur_action.action):
+        if self._are_parent_deps_satisfied(cur_action.action):
             self.create_action_task(cur_action.action)
 
         return True
@@ -3572,8 +3642,7 @@ class RascalScheduler(BaseScheduler):
     def _is_all_actions_complete(self, action: ActionEntity) -> bool:
         return self._is_all_actions_state(action, RASC_COMPLETE)
 
-    # continue to do, need to check condition variable
-    def _condition_check(self, action: ActionEntity) -> bool:
+    def _are_parent_deps_satisfied(self, action: ActionEntity) -> bool:
         """Condition check."""
         satisfied = True
         for dependency, parent_set in action.parents.items():
@@ -3591,12 +3660,29 @@ class RascalScheduler(BaseScheduler):
 
     def _run_next_action(self, action: ActionEntity, is_complete: bool = False) -> None:
         """Run the entity's next action."""
+        # Start next actions on the same entities
+        if self._action_start_method == START_EVENT_BASED:
+            target_entities = get_target_entities(self._hass, action.action)
+            for entity in target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+                if entity_id not in self._lineage_table.lock_queues:
+                    raise ValueError("Entity %s has no schedule." % entity_id)
+                next_action = self._lineage_table.lock_queues[entity_id].next(
+                    action.action_id
+                )
+                if not next_action:
+                    continue
+                self._attempt_start_action(next_action.action)
 
+        # Start next actions in the same routine
         # This is not the end of the routine
         for child in action.all_children:
-            if self._condition_check(child):
+            if self._are_parent_deps_satisfied(child):
                 if not child.is_end_node:
-                    self.create_action_task(child)
+                    if self._action_start_method == START_TIME_BASED:
+                        self.create_action_task(child)
+                    elif self._action_start_method == START_EVENT_BASED:
+                        self._attempt_start_action(child)
                 elif is_complete:
                     self._handle_end_of_routine(get_routine_id(action.action_id))
 
@@ -3723,28 +3809,8 @@ class RascalScheduler(BaseScheduler):
         if not next_action:
             return
 
-        next_routine = self._serialization_order[get_routine_id(next_action.action_id)]
-
-        if not next_routine:
-            raise ValueError(
-                "Routine %s is not found in the serialization order"
-                % get_routine_id(next_action.action_id)
-            )
-
-        condition_pass = self._condition_check(next_action.action)
-        _LOGGER.info(
-            f"{next_routine.routine_id=} {next_routine.pass_eligibility=} {condition_pass=}"
-        )
-
-        if not next_routine.pass_eligibility and self._acquire_routine_locks(
-            next_routine.routine
-        ):
-            _LOGGER.info(
-                "Routine %s passes the eligibility test", next_routine.routine_id
-            )
-            next_routine.pass_eligibility = True
-            self._start_routine(next_routine.routine)
-
-        if next_routine.pass_eligibility and condition_pass:
+        condition_pass = self._are_parent_deps_satisfied(next_action.action)
+        _LOGGER.info(f"{condition_pass=}")
+        if condition_pass:
             _LOGGER.info("Action %s is ready to start", next_action.action_id)
             self.create_action_task(next_action.action)

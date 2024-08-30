@@ -7,6 +7,7 @@ from contextlib import suppress
 from datetime import datetime, timedelta
 import json
 import logging
+import threading
 import time
 from typing import Any, Generic, Optional, TypeVar
 
@@ -335,6 +336,7 @@ class ActionEntity:
         self._attr_is_end_node = is_end_node
         self.start_requested: bool = False
         self.is_waiting: bool = False
+        self.start_lock = threading.Lock()
 
     def __repr__(self) -> str:
         """Return the string representation of the action entity."""
@@ -480,10 +482,6 @@ class ActionEntity:
         """Trigger the function."""
         action = cv.determine_script_action(self.action)
         continue_on_error = self.action.get(CONF_CONTINUE_ON_ERROR, False)
-        if self.start_requested:
-            _LOGGER.warning("Action %s already started", self.action_id)
-            return
-        self.start_requested = True
         try:
             handler = f"_async_{action}_step"
             await getattr(self, handler)()
