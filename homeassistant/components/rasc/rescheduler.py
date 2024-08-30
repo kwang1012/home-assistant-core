@@ -2808,13 +2808,13 @@ class RascalRescheduler:
 
         if self._scheduling_policy not in (TIMELINE):
             return
-        LOGGER.debug("Handling event in rescheduler %s", event)
         response = event.data.get(CONF_TYPE)
         if response not in (RASC_START, RASC_COMPLETE, RASC_INCOMPLETE):
             return
         action_id = event.data.get(ATTR_ACTION_ID)
         if not action_id:
             return
+        LOGGER.debug("Handling event in rescheduler %s", event)
         if response == RASC_START:
             timer_delay = self._init_timer_delay(event)
             self._setup_overtime_check(event, timer_delay)

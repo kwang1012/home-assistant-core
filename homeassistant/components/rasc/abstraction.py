@@ -5,6 +5,7 @@ import asyncio
 from collections.abc import Callable, Coroutine
 from datetime import datetime, timedelta
 import json
+import logging
 import math
 import time
 from typing import TYPE_CHECKING, Any, Optional, TypeVar, cast
@@ -66,6 +67,7 @@ from .log import set_logger
 
 _R = TypeVar("_R")
 LOGGER = set_logger("abstraction")
+LOGGER.setLevel(logging.INFO)
 
 
 class RASCAbstraction:
@@ -79,7 +81,7 @@ class RASCAbstraction:
         self.domain = domain
         self.hass = hass
         self.config = config or {}
-        self._store = RASCStore(self.hass)
+        self._store = RASCStore(self.hass, config)
         self._states: dict[str, RASCState] = {}
 
     def _get_entity_ids(self, service_call: ServiceCall):
@@ -114,7 +116,9 @@ class RASCAbstraction:
             )
             return 0
         if state.compl_time_estimation == 0:  # 0 if there is no progress
-            LOGGER.debug(f"{self.config.get(state.entity.entity_id, {}).get(RASC_WORST_Q, 2.0)=}")
+            LOGGER.debug(
+                f"{self.config.get(state.entity.entity_id, {}).get(RASC_WORST_Q, 2.0)=}"
+            )
             return (
                 time.time()
                 + self.config.get(state.entity.entity_id, {}).get(RASC_WORST_Q, 2.0)
@@ -900,12 +904,12 @@ class RASCState:
 class RASCStore:
     """RASC perminent store."""
 
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(self, hass: HomeAssistant, config: ConfigType | None = None) -> None:
         """Initialize a new config object."""
         self.hass = hass
 
         self.histories: dict[str, RASCHistory] = {}
-        self._store = self._ConfigStore(hass)
+        self._store = self._ConfigStore(hass, config)
         self._init_lock = asyncio.Lock()
 
     async def async_load(self) -> None:
@@ -934,12 +938,12 @@ class RASCStore:
         )
 
     class _ConfigStore(Store[dict[str, dict[str, dict[str, list[float]]]]]):
-        def __init__(self, hass: HomeAssistant) -> None:
+        def __init__(self, hass: HomeAssistant, config: ConfigType | None = None) -> None:
             """Initialize storage class."""
             super().__init__(
                 hass,
                 1,
-                "rasc",
+                config.get("rasc_history_filename", "rasc"),
                 private=True,
                 atomic_writes=True,
             )

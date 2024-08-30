@@ -326,6 +326,8 @@ def trigger_automations_later(
         if scheduler:
             with open(schedule_result, "w") as f:
                 json.dump(scheduler.get_real_schedule(), f, indent=2, default=str)
+            with open("rasc_events.json", "w") as f:
+                json.dump(hass.data["rasc_events"], f, indent=2, default=str)
         if all(
             remained_routine == 0 for remained_routine in remained_routines.values()
         ):
@@ -427,7 +429,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             ]
             trigger_automations_later(hass, config, component, routine_arrival_filename)
 
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, run_experiments)
+        hass.bus.async_listen_once("rasc_routine_setup", run_experiments)
 
     return True
 

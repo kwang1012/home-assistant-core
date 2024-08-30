@@ -1,6 +1,7 @@
 """The rasc integration."""
 from __future__ import annotations
 
+import asyncio
 import datetime
 import os
 import shutil
@@ -77,7 +78,7 @@ from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
-from .abstraction import RASCAbstraction
+from .abstraction import RASCAbstraction, ServiceFailureError
 from .const import (
     CONF_ENABLED,
     CONF_RESULTS_DIR,
@@ -149,6 +150,8 @@ CONFIG_SCHEMA = vol.Schema(
             {
                 vol.Optional(CONF_ENABLED, default=True): bool,
                 vol.Optional(OVERHEAD_MEASUREMENT, default=False): bool,
+                vol.Optional("routine_setup_filename", default={}): dict,
+                vol.Optional("rasc_history_filename"): cv.string,
                 vol.Optional(ACTION_LENGTH_ESTIMATION, default="mean"): vol.In(
                     supported_action_length_estimations
                 ),
@@ -275,6 +278,30 @@ def _save_rasc_configs(configs: ConfigType, result_dir: str) -> None:
         for key, value in configs.items():
             f.write(f"{key}: {value}\n")
 
+async def initialize_entity_state(hass: HomeAssistant, entity_id: str, service_calls: list[dict]):
+    domain = entity_id.split(".")[0]
+    try:
+        for service_call in service_calls:
+            service = service_call.pop("service")
+            _, _, c_coro = hass.services.rasc_call(domain, service, {"entity_id": entity_id, "params": service_call})
+            await c_coro
+        return True
+    except ServiceFailureError as e:
+        LOGGER.error(f"Failed to initialize entity state: {entity_id}")
+        return False
+
+async def setup_routine(hass: HomeAssistant, config: ConfigType):
+    routine_setup_conf = config[DOMAIN]["routine_setup_filename"]
+    tasks = []
+    for entity_id, service_calls in routine_setup_conf.items():
+        tasks.append(hass.async_create_task(initialize_entity_state(hass, entity_id, service_calls)))
+
+    results = await asyncio.gather(*tasks)
+    if any(not result for result in results):
+        LOGGER.error("Failed to setup routine")
+    else:
+        print("Setup routine completed")
+        hass.bus.async_fire("rasc_routine_setup")
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the RASC component."""
@@ -292,6 +319,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     result_dir = _create_result_dir()
     _save_rasc_configs(config[DOMAIN], result_dir)
 
+    rasc_history_conf = config[DOMAIN].get("rasc_history_filename")
+    path = "homeassistant/components/rasc/datasets"
+    storage_path = "config/.storage"
+    if rasc_history_conf:
+        shutil.copy(os.path.join(path, rasc_history_conf), storage_path)
+
     component = hass.data[DOMAIN] = RASCAbstraction(
         LOGGER, DOMAIN, hass, config[DOMAIN]
     )
@@ -305,7 +338,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         )
         scheduler.reschedule_handler = rescheduler.handle_event
 
+    hass.data["rasc_events"] = []
+
     await component.async_load()
+
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, setup_routine(hass, config))
 
     if RASC_EXPERIMENT_SETTING in config[DOMAIN]:
         hass.bus.async_listen_once(

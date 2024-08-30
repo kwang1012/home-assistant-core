@@ -3286,8 +3286,6 @@ class RascalScheduler(BaseScheduler):
                 await self._reschedule_handler(event)
                 self._start_ready_actions()
 
-            _LOGGER.debug("Handling event %s", event)
-
             event_type: Optional[str] = event.data.get(CONF_TYPE)
             entity_id: Optional[str] = event.data.get(CONF_ENTITY_ID)
             action_id: Optional[str] = event.data.get(ATTR_ACTION_ID)
@@ -3300,6 +3298,8 @@ class RascalScheduler(BaseScheduler):
                 or not event_type
             ):
                 return
+
+            _LOGGER.debug("Handling event %s", event)
 
             # Get the running action in the serialization
             try:
