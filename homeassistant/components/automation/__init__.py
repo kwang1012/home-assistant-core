@@ -826,7 +826,7 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
                         routine = self._routine.duplicate(variables, trigger_context)
 
                         # Initialize the routine
-                        rascal_scheduler.initialize_routine(routine)
+                        await rascal_scheduler.initialize_routine(routine)
                     else:
                         await self.action_script.async_run(
                             variables, trigger_context, started_action

@@ -7,7 +7,6 @@ from contextlib import suppress
 from datetime import datetime, timedelta
 import json
 import logging
-import threading
 import time
 from typing import Any, Generic, Optional, TypeVar
 
@@ -336,7 +335,7 @@ class ActionEntity:
         self._attr_is_end_node = is_end_node
         self.start_requested: bool = False
         self.is_waiting: bool = False
-        self.start_lock = threading.Lock()
+        self.start_lock = asyncio.Lock()
 
     def __repr__(self) -> str:
         """Return the string representation of the action entity."""
@@ -410,6 +409,7 @@ class ActionEntity:
         new_entity.parents = self.parents
         new_entity.children = self.children
         new_entity.is_waiting = self.is_waiting
+        new_entity.start_requested = self.start_requested
         return new_entity
 
     @property

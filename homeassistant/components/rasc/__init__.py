@@ -278,23 +278,33 @@ def _save_rasc_configs(configs: ConfigType, result_dir: str) -> None:
         for key, value in configs.items():
             f.write(f"{key}: {value}\n")
 
-async def initialize_entity_state(hass: HomeAssistant, entity_id: str, service_calls: list[dict]):
+
+async def initialize_entity_state(
+    hass: HomeAssistant, entity_id: str, service_calls: list[dict]
+):
     domain = entity_id.split(".")[0]
     try:
         for service_call in service_calls:
             service = service_call.pop("service")
-            _, _, c_coro = hass.services.rasc_call(domain, service, {"entity_id": entity_id, "params": service_call})
+            _, _, c_coro = hass.services.rasc_call(
+                domain, service, {"entity_id": entity_id, "params": service_call}
+            )
             await c_coro
         return True
-    except ServiceFailureError as e:
+    except ServiceFailureError:
         LOGGER.error(f"Failed to initialize entity state: {entity_id}")
         return False
+
 
 async def setup_routine(hass: HomeAssistant, config: ConfigType):
     routine_setup_conf = config[DOMAIN]["routine_setup_filename"]
     tasks = []
     for entity_id, service_calls in routine_setup_conf.items():
-        tasks.append(hass.async_create_task(initialize_entity_state(hass, entity_id, service_calls)))
+        tasks.append(
+            hass.async_create_task(
+                initialize_entity_state(hass, entity_id, service_calls)
+            )
+        )
 
     results = await asyncio.gather(*tasks)
     if any(not result for result in results):
@@ -302,6 +312,7 @@ async def setup_routine(hass: HomeAssistant, config: ConfigType):
     else:
         print("Setup routine completed")
         hass.bus.async_fire("rasc_routine_setup")
+
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the RASC component."""
