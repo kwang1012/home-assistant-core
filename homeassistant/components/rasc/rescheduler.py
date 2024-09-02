@@ -49,6 +49,7 @@ from homeassistant.const import (
     SHORTEST,
     SJFW,
     SJFWO,
+    START_EVENT_BASED,
     START_TIME_BASED,
     TIMELINE,
 )
@@ -331,10 +332,12 @@ class BaseRescheduler(TimeLineScheduler):
             entities |= set(get_target_entities(self._hass, action.action))
         return entities
 
-    def _is_action_running(self, action_id: str, time: datetime) -> bool:
+    def _is_action_running(self, action_id: str, time: datetime = datetime.now()) -> bool:
         action = self.get_action(action_id)
         if not action:
             raise ValueError(f"Action {action_id} is missing.")
+        if self._scheduler.action_start_method == START_EVENT_BASED:
+            return action.start_requested
         entities = get_target_entities(self._hass, action.action)
         for entity in entities:
             entity_id = get_entity_id_from_number(self._hass, entity)
@@ -360,7 +363,7 @@ class BaseRescheduler(TimeLineScheduler):
         for action_id, action in routine.actions.items():
             if action.is_end_node:
                 continue
-            if not self._is_action_running(action_id, time):
+            if not self._is_action_running(action_id):
                 actions[action_id] = action
         return actions
 
@@ -393,7 +396,8 @@ class BaseRescheduler(TimeLineScheduler):
                 continue
             # should I change the order of below command with above check?
             descendants.extend(descendant.all_children)
-            if self._is_action_running(descendant.action_id, time):
+            # if self._is_action_running(descendant.action_id, time):
+            if self._is_action_running(descendant.action_id):
                 continue
             affected_actions[descendant.action_id] = descendant
 
@@ -526,7 +530,7 @@ class BaseRescheduler(TimeLineScheduler):
 
         return immutable_order
 
-    def deschedule_affected_actions(self, affected_action_ids: set[str]) -> None:
+    def deschedule_affected_actions(self, affected_action_ids: set[str]) -> dict[str, ActionEntity]:
         """Deschedule the affected actions and the actions after them on each entity.
 
         Returns:
@@ -535,66 +539,84 @@ class BaseRescheduler(TimeLineScheduler):
             set[ActionEntity]: All the unique (across entities) descheduled actions.
             set[str]: The affected entities.
         """
-        for entity_id, lock_queue in self._lineage_table.lock_queues.items():
-            free_st_time = None
-            actions_to_remove = []
+        descheduled_actions = dict[str, ActionEntity]()
+        extra_affected_action_ids = affected_action_ids.copy()
 
-            # identify all actions to be descheduled from the lock queue
-            for action_id, action_lock in lock_queue.items():
-                if not action_lock:
-                    raise ValueError(
-                        "Action {}'s schedule information on entity {} is missing.".format(
-                            action_id, entity_id
+        while extra_affected_action_ids:
+            affected_action_ids.clear()
+            affected_action_ids.update(extra_affected_action_ids)
+            extra_affected_action_ids = set[str]()
+            for entity_id, lock_queue in self._lineage_table.lock_queues.items():
+                free_st_time = None
+                actions_to_remove = []
+
+                # identify all actions to be descheduled from the lock queue
+                for action_id, action_lock in lock_queue.items():
+                    if not action_lock:
+                        raise ValueError(
+                            "Action {}'s schedule information on entity {} is missing.".format(
+                                action_id, entity_id
+                            )
                         )
-                    )
-                # start = (
-                #     datetime_to_string(action_lock.start_time) if action_lock else None
-                # )
-                # free = datetime_to_string(free_st_time) if free_st_time else None
-                # LOGGER.debug(f"{action_id=}, {start=}, {free=}")
-                if not free_st_time:
-                    # while a source action is not found, skip the action
+                    # start = (
+                    #     datetime_to_string(action_lock.start_time) if action_lock else None
+                    # )
+                    # free = datetime_to_string(free_st_time) if free_st_time else None
+                    # LOGGER.debug(f"{action_id=}, {start=}, {free=}")
+                    if not free_st_time:
+                        # while a source action is not found, skip the action
+                        if action_id not in affected_action_ids:
+                            LOGGER.debug("Skip action %s in entity %s", action_id, entity_id)
+                            continue
+                        # record the first action's start time
+                        # to create a free slot later
+
+                        LOGGER.debug("First affected action %s in entity %s", action_id, entity_id)
+                        free_st_time = action_lock.start_time
+
+                    # after a source action has been found while traversing in ascending
+                    # chronological order, add every action to the descheduled actions
+                    # (including the found source action)
+                    LOGGER.debug("Later affected action %s in entity %s", action_id, entity_id)
+                    actions_to_remove.append(action_id)
+                # LOGGER.debug(f"{actions_to_remove=}")
+
+                # if not actions_to_remove:
+                #     LOGGER.debug("None of %s scheduled on %s", affected_action_ids, entity_id)
+                #     output_all(LOGGER, lock_queues=self._lineage_table.lock_queues)
+
+                # remove the actions from the lock queue
+                for action_id in actions_to_remove:
+                    descheduled_action = lock_queue.pop(action_id).action
+                    if descheduled_action.action_id in descheduled_actions:
+                        continue
+                    descheduled_actions[action_id] = descheduled_action
                     if action_id not in affected_action_ids:
-                        continue
-                    # record the first action's start time
-                    # to create a free slot later
-                    free_st_time = action_lock.start_time
+                        extra_affected_action_ids.add(action_id)
 
-                # after a source action has been found while traversing in ascending
-                # chronological order, add every action to the descheduled actions
-                # (including the found source action)
-                actions_to_remove.append(action_id)
-            # LOGGER.debug(f"{actions_to_remove=}")
-
-            # if not actions_to_remove:
-            #     LOGGER.debug("None of %s scheduled on %s", affected_action_ids, entity_id)
-            #     output_all(LOGGER, lock_queues=self._lineage_table.lock_queues)
-
-            # remove the actions from the lock queue
-            for action_id in actions_to_remove:
-                lock_queue.pop(action_id)
-
-            # create one big free slot replacing the descheduled actions
-            if free_st_time:
-                free_slots = self._lineage_table.free_slots[entity_id]
-                prev_st_time = None
-                slots_to_remove = []
-                # find the free slot that finishes on the start time
-                # of the first descheduled action, if one exists
-                for st_time, end_time in free_slots.items():
-                    if end_time and end_time < free_st_time:
-                        continue
-                    if not end_time:
-                        if st_time < free_st_time:
+                # create one big free slot replacing the descheduled actions
+                if free_st_time:
+                    free_slots = self._lineage_table.free_slots[entity_id]
+                    prev_st_time = None
+                    slots_to_remove = []
+                    # find the free slot that finishes on the start time
+                    # of the first descheduled action, if one exists
+                    for st_time, end_time in free_slots.items():
+                        if end_time and end_time < free_st_time:
+                            continue
+                        if not end_time:
+                            if st_time < free_st_time:
+                                prev_st_time = st_time
+                        if end_time and end_time == free_st_time:
                             prev_st_time = st_time
-                    if end_time and end_time == free_st_time:
-                        prev_st_time = st_time
-                    slots_to_remove.append(st_time)
-                for st_time in slots_to_remove:
-                    del free_slots[st_time]
-                if not prev_st_time:
-                    prev_st_time = free_st_time
-                free_slots[prev_st_time] = None
+                        slots_to_remove.append(st_time)
+                    for st_time in slots_to_remove:
+                        del free_slots[st_time]
+                    if not prev_st_time:
+                        prev_st_time = free_st_time
+                    free_slots[prev_st_time] = None
+
+        return descheduled_actions
 
     def apply_serialization_order_dependencies(
         self, immutable_order: list[str], descheduled_actions: dict[str, ActionEntity]
@@ -824,7 +846,7 @@ class BaseRescheduler(TimeLineScheduler):
             datetime_to_string(action_st),
             target_entities,
         )
-        if action.is_waiting and self._scheduler._action_start_method == START_TIME_BASED:
+        if action.is_waiting and self._scheduler.action_start_method == START_TIME_BASED:
             self._scheduler.cancel_action_task(action.action_id)
         for target_entity in target_entities:
             entity_id = get_entity_id_from_number(self._hass, target_entity)
@@ -841,7 +863,7 @@ class BaseRescheduler(TimeLineScheduler):
 
             self.schedule_lock(action, (action_st, action_end), entity_id, lock_queues)
 
-        if action.is_waiting and self._scheduler._action_start_method == START_TIME_BASED:
+        if action.is_waiting and self._scheduler.action_start_method == START_TIME_BASED:
             self._scheduler.create_action_task(action)
 
     def _output_wait_queues(
@@ -941,7 +963,7 @@ class BaseRescheduler(TimeLineScheduler):
 
         visited = set[ActionEntity]()
 
-        # LOGGER.debug(f"{descheduled_actions=}")
+        LOGGER.debug("Descheduled actions: %s", list(descheduled_actions.keys()))
         while descheduled_actions:
             # filter out entities with no actions to schedule
             filtered_next_slots = {
@@ -953,16 +975,17 @@ class BaseRescheduler(TimeLineScheduler):
             next_entity_id, next_slot_st = min(
                 filtered_next_slots.items(), key=lambda x: x[1]
             )
-            LOGGER.debug(
-                "next entity: %s, next slot start: %s",
-                next_entity_id,
-                datetime_to_string(next_slot_st),
-            )
+            # LOGGER.debug(
+            #     "next entity: %s, next slot start: %s",
+            #     next_entity_id,
+            #     datetime_to_string(next_slot_st),
+            # )
 
             # find the action with the shortest duration
             # if 'light.front_door_light' in wait_queues:
             #     LOGGER.debug(f"{wait_queues['light.front_door_light']=}")
             shortest_action = heapq.heappop(wait_queues[next_entity_id])[1]
+            LOGGER.info("Rescheduling %s", shortest_action)
             if shortest_action in visited:
                 if not wait_queues[next_entity_id]:
                     del wait_queues[next_entity_id]
@@ -976,7 +999,7 @@ class BaseRescheduler(TimeLineScheduler):
                     del wait_queues[next_entity_id]
                 continue
 
-            LOGGER.debug("shortest action: %s", shortest_action)
+            # LOGGER.debug("shortest action: %s", shortest_action)
             action_st = self._find_action_start_after(shortest_action, next_slot_st)
             action_st = max(action_st, datetime.now())
             self.reschedule_all_action(
@@ -1008,6 +1031,7 @@ class BaseRescheduler(TimeLineScheduler):
                         shortest_action_routine_id
                     ] = old_serialization_order[shortest_action_routine_id]
 
+                LOGGER.debug("Descheduled actions after serializabilization: %s", list(descheduled_actions.keys()))
             # add children of the chosen action to the affected entities' wait queues
             for child in shortest_action.all_children:
                 if child.is_end_node:
@@ -2417,6 +2441,7 @@ class RascalRescheduler:
     ) -> None:
         """Reschedule the entities based on the rescheduling policy."""
         start_time = t.time()
+        LOGGER.info("============= Reschedule starts due to %s %s =============", entity_id, action_id)
 
         # Save the old schedule
         old_lt = self._scheduler.lineage_table.duplicate
@@ -2481,9 +2506,9 @@ class RascalRescheduler:
                 LOGGER.info(
                     "No affected source actions found, nothing to reschedule"
                 )
-                self._apply_schedule(old_lt, old_so)
+                # self._apply_schedule(old_lt, old_so)
                 return
-            LOGGER.info("Affected actions: %s", affected_actions)
+            LOGGER.info("Affected actions: %s", list(affected_actions.keys()))
 
             serializability = self._resched_policy in (SJFW, OPTIMALW)
             immutable_serialization_order = None
@@ -2496,9 +2521,13 @@ class RascalRescheduler:
                     "Immutable serialization order: %s",
                     immutable_serialization_order,
                 )
-            self._rescheduler.deschedule_affected_actions(
+            for entity_id, lock_queue in self._rescheduler.lineage_table.lock_queues.items():
+                LOGGER.info("Entity %s: actions before deschedule: %s", entity_id, list(lock_queue.keys()))
+            affected_actions = self._rescheduler.deschedule_affected_actions(
                 set(affected_actions.keys())
             )
+            for entity_id, lock_queue in self._rescheduler.lineage_table.lock_queues.items():
+                LOGGER.info("Entity %s: actions after deschedule: %s", entity_id, list(lock_queue.keys()))
             if serializability and immutable_serialization_order:
                 descheduled_actions = (
                     self._rescheduler.apply_serialization_order_dependencies(
@@ -2548,7 +2577,7 @@ class RascalRescheduler:
                     metrics,
                 )
         if not new_lt:
-            self._apply_schedule(old_lt, old_so)
+            # self._apply_schedule(old_lt, old_so)
             return
         LOGGER.info("New schedule created at %s", datetime.now())
         output_all(
@@ -2563,6 +2592,7 @@ class RascalRescheduler:
             "reschedule_event",
             {"from": start_time, "to": end_time, "diff": diff.total_seconds()},
         )
+        LOGGER.info("============= Reschedule ends =============")
 
     def _apply_schedule(
         self,
@@ -2739,14 +2769,14 @@ class RascalRescheduler:
         entity_id: Optional[str] = event.data.get(ATTR_ENTITY_ID)
         action_id: Optional[str] = event.data.get(ATTR_ACTION_ID)
         LOGGER.info(
-            "Setting up overtime check for %s on %s in %s seconds,\nat %s/%s for %s. timer handles: %s",
+            "Setting up overtime check for %s on %s in %s seconds,\nat %s/%s for %s.",
             action_id,
             entity_id,
             timer_delay,
             datetime.fromtimestamp(t.time()),
             datetime.now(),
             datetime.fromtimestamp(t.time() + timer_delay),
-            self._timer_handles,
+            # self._timer_handles,
         )
         output_all(LOGGER, lock_queues=self._scheduler.lineage_table.lock_queues)
         task = self._hass.async_create_task(

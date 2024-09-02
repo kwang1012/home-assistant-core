@@ -1447,10 +1447,11 @@ class BaseScheduler:
                 )
                 self.update_real_schedule(entity_id, new_action, new_action_slot)
                 _LOGGER.debug(
-                    "Schedule the action %s to the lock queue %s: %s",
+                    "Schedule the action %s to the lock queue %s: %s-%s",
                     new_action.action_id,
                     entity_id,
-                    new_action_slot,
+                    datetime_to_string(new_action_slot[0]),
+                    datetime_to_string(new_action_slot[1]),
                 )
                 return
 
@@ -2367,7 +2368,7 @@ class RascalScheduler(BaseScheduler):
         self._record_results = config[CONF_RECORD_RESULTS]
         if self._record_results:
             self._result_dir = result_dir
-        self._action_start_method = config[CONF_ACTION_START_METHOD]
+        self.action_start_method: str = config[CONF_ACTION_START_METHOD]
         self._hass.bus.async_listen(RASC_RESPONSE, self.handle_event)
 
         self._action_tasks: dict[str, asyncio.Task] = {}
@@ -3034,9 +3035,9 @@ class RascalScheduler(BaseScheduler):
         # Start the action that doesn't have the parents
         for action_entity in list(routine.actions.values())[:-1]:
             if not action_entity.all_parents:
-                if self._action_start_method == START_TIME_BASED:
+                if self.action_start_method == START_TIME_BASED:
                     self.create_action_task(action_entity)
-                elif self._action_start_method == START_EVENT_BASED:
+                elif self.action_start_method == START_EVENT_BASED:
                     await self._attempt_start_action(action_entity, "start_routine")
 
     def cancel_action_task(self, action_id: str) -> None:
@@ -3168,6 +3169,10 @@ class RascalScheduler(BaseScheduler):
 
         async with action.start_lock:
 
+            if action.start_requested:
+                # _LOGGER.warning("Action %s has already started", action.action_id)
+                return
+
             _LOGGER.info(
                 "(%s) (_attempt_start_action) Start action %s at %s vs scheduled start time: %s, start_requested: %s, %d",
                 parent,
@@ -3177,12 +3182,9 @@ class RascalScheduler(BaseScheduler):
                 action.start_requested,
                 action.__hash__()
             )
-            if action.start_requested:
-                # _LOGGER.warning("Action %s has already started", action.action_id)
-                return
 
             if not self._is_action_ready(action):
-                _LOGGER.debug("Action %s is not ready to start", action.action_id)
+                _LOGGER.info("Action %s is not ready to start", action.action_id)
                 return
 
             # _LOGGER.info(
@@ -3270,7 +3272,7 @@ class RascalScheduler(BaseScheduler):
                 )
                 return False
 
-        if self._action_start_method == START_EVENT_BASED:
+        if self.action_start_method == START_EVENT_BASED:
             # Check if the previous actions on the common entities are over
             if not self._are_prev_actions_over(action):
                 return False
@@ -3407,7 +3409,7 @@ class RascalScheduler(BaseScheduler):
                         await self._start_ready_routines_jit(entity_id)
 
                 elif self._scheduling_policy == TIMELINE:
-                    if self._action_start_method == START_TIME_BASED:
+                    if self.action_start_method == START_TIME_BASED:
                         self._start_ready_routines_tl(action_id, entity_id)
 
                 # Check if the action is completed on all entities
@@ -3485,7 +3487,7 @@ class RascalScheduler(BaseScheduler):
             lock_queues=self._lineage_table.lock_queues,
         )
 
-        if self._are_parent_deps_satisfied(cur_action.action) and self._action_start_method == START_TIME_BASED:
+        if self._are_parent_deps_satisfied(cur_action.action) and self.action_start_method == START_TIME_BASED:
             self.create_action_task(cur_action.action)
 
         return True
@@ -3679,7 +3681,7 @@ class RascalScheduler(BaseScheduler):
     async def _run_next_action(self, action: ActionEntity, is_complete: bool = False) -> None:
         """Run the entity's next action."""
         # Start next actions on the same entities
-        if self._action_start_method == START_EVENT_BASED:
+        if self.action_start_method == START_EVENT_BASED:
             target_entities = get_target_entities(self._hass, action.action)
             for entity in target_entities:
                 entity_id = get_entity_id_from_number(self._hass, entity)
@@ -3697,9 +3699,9 @@ class RascalScheduler(BaseScheduler):
         for child in action.all_children:
             if self._are_parent_deps_satisfied(child):
                 if not child.is_end_node:
-                    if self._action_start_method == START_TIME_BASED:
+                    if self.action_start_method == START_TIME_BASED:
                         self.create_action_task(child)
-                    elif self._action_start_method == START_EVENT_BASED:
+                    elif self.action_start_method == START_EVENT_BASED:
                         await self._attempt_start_action(child, "run_next_action")
                 elif is_complete:
                     self._handle_end_of_routine(get_routine_id(action.action_id))
@@ -3829,6 +3831,6 @@ class RascalScheduler(BaseScheduler):
 
         condition_pass = self._are_parent_deps_satisfied(next_action.action)
         _LOGGER.info(f"{condition_pass=}")
-        if condition_pass and self._action_start_method == START_TIME_BASED:
+        if condition_pass and self.action_start_method == START_TIME_BASED:
             _LOGGER.info("Action %s is ready to start", next_action.action_id)
             self.create_action_task(next_action.action)
