@@ -314,10 +314,11 @@ async def setup_routine(hass: HomeAssistant, config: ConfigType):
         print("Setup routine completed")
         hass.bus.async_fire("rasc_routine_setup")
 
+
 def examine_final_state(hass: HomeAssistant, config: ConfigType):
     routine_setup_conf = config[DOMAIN]["routine_setup_filename"]
     final_states = {}
-    for entity_id in routine_setup_conf.keys():
+    for entity_id in routine_setup_conf:
         state = hass.states.get(entity_id)
         final_states[entity_id] = {
             "state": state.state,
@@ -328,7 +329,7 @@ def examine_final_state(hass: HomeAssistant, config: ConfigType):
     path = "homeassistant/components/rasc/datasets"
     # with open(os.path.join(path, "all_final_state.json"), "w") as f:
     #     json.dump(final_states, f, indent=4)
-    with open(os.path.join(path, "morning_final_state.json"), "r") as f:
+    with open(os.path.join(path, "morning_final_state.json")) as f:
         fcfs_states = json.load(f)
 
     differ_states = {}
@@ -337,7 +338,11 @@ def examine_final_state(hass: HomeAssistant, config: ConfigType):
             differ_states[entity_id] = f"{state} vs {fcfs_states[entity_id]}"
 
     if differ_states:
-        LOGGER.error("Final states are different from FCFS:\n%s", json.dumps(differ_states, indent=2))
+        LOGGER.error(
+            "Final states are different from FCFS:\n%s",
+            json.dumps(differ_states, indent=2),
+        )
+
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the RASC component."""

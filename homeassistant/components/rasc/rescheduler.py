@@ -221,8 +221,10 @@ class BaseRescheduler(TimeLineScheduler):
                     )
 
                 # skip the action if it is already running before st_time
-                if action_lock.start_time < st_time:
+                if action_lock.action.start_requested:
                     continue
+                # if action_lock.start_time < st_time:
+                #     continue
 
                 # add the action to the heap, ordered by the current start time
                 heapq.heappush(next_action_heap, action_lock)
@@ -612,6 +614,9 @@ class BaseRescheduler(TimeLineScheduler):
                     if not prev_st_time:
                         prev_st_time = free_st_time
                     free_slots[prev_st_time] = None
+
+                self._lineage_table.free_slots[entity_id]
+
 
         return descheduled_actions
 
@@ -2420,7 +2425,7 @@ class RascalRescheduler:
             return True
         new_sched = await self._rescheduler.move_device_schedules(time, extra)
         if not new_sched:
-            self._apply_schedule(old_sched)
+            # self._apply_schedule(old_sched)
             return False
         self._apply_schedule(new_sched)
         return True

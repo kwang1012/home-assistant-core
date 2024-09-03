@@ -5,6 +5,7 @@ import asyncio
 from collections.abc import Iterator, Sequence
 from contextlib import suppress
 from datetime import datetime, timedelta
+import functools
 import json
 import logging
 import time
@@ -684,6 +685,8 @@ class Queue(Generic[_KT, _VT]):
         if key in self._keys:
             _LOGGER.error("Key %s already in the queue, not appended", key)
         self._keys.append(key)
+        if isinstance(key, datetime):
+            self._keys = sorted(self._keys, key=functools.cmp_to_key(lambda x, y: (x - y).total_seconds()))
         self._data[key] = value
 
     def __delitem__(self, key: _KT) -> None:
@@ -836,7 +839,7 @@ class Queue(Generic[_KT, _VT]):
         """Return the string representation of the queue."""
         if self._keys and isinstance(self.top()[0], datetime):
             text = ", ".join(
-                [time_range_to_string(item) for item in self._data.items()]
+                [time_range_to_string((key, self._data[key])) for key in self._keys]
             )
         else:
             text = ", ".join([f"{key}: {value}" for key, value in self._data.items()])
