@@ -277,7 +277,7 @@ def trigger_automations_later(
             if routine_id not in routine_arrivals:
                 routine_arrivals[routine_id] = []
             routine_arrivals[routine_id].append(arrival_time)
-            routine_aliases[routine_id] = routine_alias
+            routine_aliases[routine_id] = f"{routine_alias}({routine_id})"
 
     async def trigger_automation_later(
         automation: BaseAutomationEntity, arrival_time: float
@@ -332,7 +332,6 @@ def trigger_automations_later(
             remained_routine == 0 for remained_routine in remained_routines.values()
         ):
             hass.bus.async_fire("rasc_measurement_stop")
-            hass.stop()
 
     hass.bus.async_listen("routine_ended", handle_routine_ended)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import os
 import shutil
 
@@ -313,6 +314,30 @@ async def setup_routine(hass: HomeAssistant, config: ConfigType):
         print("Setup routine completed")
         hass.bus.async_fire("rasc_routine_setup")
 
+def examine_final_state(hass: HomeAssistant, config: ConfigType):
+    routine_setup_conf = config[DOMAIN]["routine_setup_filename"]
+    final_states = {}
+    for entity_id in routine_setup_conf.keys():
+        state = hass.states.get(entity_id)
+        final_states[entity_id] = {
+            "state": state.state,
+        }
+        if state.domain == "light":
+            final_states[entity_id]["brightness"] = state.attributes["brightness"]
+
+    path = "homeassistant/components/rasc/datasets"
+    # with open(os.path.join(path, "all_final_state.json"), "w") as f:
+    #     json.dump(final_states, f, indent=4)
+    with open(os.path.join(path, "morning_final_state.json"), "r") as f:
+        fcfs_states = json.load(f)
+
+    differ_states = {}
+    for entity_id, state in final_states.items():
+        if state != fcfs_states[entity_id]:
+            differ_states[entity_id] = f"{state} vs {fcfs_states[entity_id]}"
+
+    if differ_states:
+        LOGGER.error("Final states are different from FCFS:\n%s", json.dumps(differ_states, indent=2))
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the RASC component."""
@@ -321,8 +346,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     om = OverheadMeasurement(hass, config[DOMAIN])
 
+    def handle_measurement_stop(event):
+        om.stop()
+        examine_final_state(hass, config)
+        hass.stop()
+
     hass.bus.async_listen_once("rasc_measurement_start", lambda _: om.start())
-    hass.bus.async_listen_once("rasc_measurement_stop", lambda _: om.stop())
+    hass.bus.async_listen_once("rasc_measurement_stop", handle_measurement_stop)
 
     if not config[DOMAIN][CONF_ENABLED]:
         return True

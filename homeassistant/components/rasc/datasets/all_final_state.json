@@ -1,0 +1,91 @@
+{
+    "light.first_floor_lights": {
+        "state": "on",
+        "brightness": 128
+    },
+    "light.ground_floor_lights": {
+        "state": "on",
+        "brightness": 1
+    },
+    "light.living_room": {
+        "state": "off",
+        "brightness": 255
+    },
+    "light.bedroom": {
+        "state": "off",
+        "brightness": 128
+    },
+    "light.xmas_tree": {
+        "state": "on",
+        "brightness": 128
+    },
+    "light.slight_firstfl_act01": {
+        "state": "off",
+        "brightness": 1
+    },
+    "light.slight_firstfl_corridor": {
+        "state": "on",
+        "brightness": 255
+    },
+    "light.slight_kidsroom_act01": {
+        "state": "off",
+        "brightness": 255
+    },
+    "light.slight_kidsroom_02": {
+        "state": "on",
+        "brightness": 204
+    },
+    "light.front_door_light": {
+        "state": "on",
+        "brightness": 255
+    },
+    "light.garden_door_light": {
+        "state": "on",
+        "brightness": 255
+    },
+    "switch.harmony_hub": {
+        "state": "on"
+    },
+    "switch.garage_door_switch": {
+        "state": "off"
+    },
+    "cover.shade_as_trash_can": {
+        "state": "open"
+    },
+    "cover.balcony": {
+        "state": "closed"
+    },
+    "cover.second_floor_balcony": {
+        "state": "closed"
+    },
+    "cover.garage_door": {
+        "state": "closed"
+    },
+    "cover.interior_door": {
+        "state": "closed"
+    },
+    "cover.front_door": {
+        "state": "closed"
+    },
+    "cover.main_door": {
+        "state": "closed"
+    },
+    "cover.living_room_window": {
+        "state": "closed"
+    },
+    "lock.main_door_lock": {
+        "state": "locked"
+    },
+    "lock.garage_door_lock": {
+        "state": "locked"
+    },
+    "lock.front_door_lock": {
+        "state": "locked"
+    },
+    "lock.interior_door_lock": {
+        "state": "locked"
+    },
+    "fan.living_room_fan": {
+        "state": "off"
+    }
+}

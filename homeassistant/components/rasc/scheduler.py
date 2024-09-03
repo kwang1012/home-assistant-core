@@ -1785,6 +1785,7 @@ class TimeLineScheduler(BaseScheduler):
         """Get then next start time for the given routine."""
         # The idea is to reschedule the routine after the routines in the postset.
 
+        _LOGGER.info(f"{preset=}, {postset=}")
         target_entities: list[str] = []
         candidates: list[datetime] = []
 
@@ -1855,6 +1856,7 @@ class TimeLineScheduler(BaseScheduler):
                 # Only require to identify the earliest action end time within the existing routines that may cause a serializability conflict.
                 # if find_candidate:
                 #     break
+        _LOGGER.info(f"{candidates=}")
         return max(candidates)
 
     def conflict_determined_serializability_in_case_tl(
@@ -1894,7 +1896,7 @@ class TimeLineScheduler(BaseScheduler):
         )
 
         conflict = None
-        cur_preset = cur_postset = set[str]()
+        cur_preset, cur_postset = set[str](), set[str]()
         for slot_start, slot_end in free_slots[entity_id].items():
             # Check if the gap is available
             if slot_end and slot_end <= now:
@@ -1970,6 +1972,7 @@ class TimeLineScheduler(BaseScheduler):
         for action in self._lineage_table.lock_queues[entity_id].values():
             if not action:
                 continue
+            _LOGGER.info(f"Action {action.action_id} end time: {action.end_time} gap start time: {gap_start_time}")
             if action.end_time <= gap_start_time and get_routine_id(
                 action.action_id
             ) != get_routine_id(new_action.action_id):
@@ -1987,6 +1990,7 @@ class TimeLineScheduler(BaseScheduler):
     ) -> set[str]:
         """Get postset."""
 
+        _LOGGER.info(f"{gap=}")
         gap_end_time = gap[1]
         postset = set[str]()
         if not gap_end_time:
@@ -1995,6 +1999,7 @@ class TimeLineScheduler(BaseScheduler):
         for action in self._lineage_table.lock_queues[entity_id].values():
             if not action:
                 continue
+            _LOGGER.info(f"Action {action.action_id} start time: {action.start_time} gap end time: {gap_end_time}")
             if action.start_time >= gap_end_time and get_routine_id(
                 action.action_id
             ) != get_routine_id(new_action.action_id):
@@ -2245,9 +2250,7 @@ class TimeLineScheduler(BaseScheduler):
             temp: str = script[CONF_SERVICE]
             domain = temp.split(".")[0]
             if domain == DOMAIN_SCRIPT:
-                script_component: EntityComponent[BaseScriptEntity] = hass.data[
-                    DOMAIN_SCRIPT
-                ]
+                script_component: EntityComponent[BaseScriptEntity] | None = hass.data.get(DOMAIN_SCRIPT)
 
                 if not script_component:
                     return False, next_end_time, None
@@ -2874,7 +2877,7 @@ class RascalScheduler(BaseScheduler):
                 )
 
                 if success:
-                    if not lock_leasing_status:
+                    if self._scheduling_policy != FCFS and not lock_leasing_status:
                         raise ValueError(
                             "Failed to schedule the routine {}. There should be a lock leasing status.".format(
                                 routine.routine_id
@@ -2893,7 +2896,7 @@ class RascalScheduler(BaseScheduler):
                     return True
 
                 self._remove_scheduled_actions(routine.routine_id)
-                _LOGGER.error(
+                _LOGGER.warning(
                     "Routine %s failed to pass the eligibility test", routine.routine_id
                 )
                 return False
@@ -2910,7 +2913,11 @@ class RascalScheduler(BaseScheduler):
             ) = self._scheduler.schedule_routine_in_case_tl(
                 self._hass, routine, datetime.now()
             )
+            tries = 0
             while not success:  # pylint: disable=too-many-nested-blocks
+                if tries > 10:
+                    raise ValueError(
+                        "Failed to schedule the routine {} after {} tries".format(routine.routine_id, tries))
                 if (
                     not lock_leasing_status
                     or "next_start_time" not in lock_leasing_status
@@ -2957,6 +2964,7 @@ class RascalScheduler(BaseScheduler):
                                     )
 
                                 next_start_time = max(next_start_time, action_lock.end_time)
+                _LOGGER.info(f"{next_start_time=}")
                 # rescheule the routine
                 (
                     success,
@@ -2967,6 +2975,7 @@ class RascalScheduler(BaseScheduler):
                     routine,
                     next_start_time,
                 )
+                tries += 1
 
             self._add_routine_to_serialization_order(routine, lock_leasing_status)
             # if self._acquire_routine_locks(routine):
@@ -3038,7 +3047,7 @@ class RascalScheduler(BaseScheduler):
                 if self.action_start_method == START_TIME_BASED:
                     self.create_action_task(action_entity)
                 elif self.action_start_method == START_EVENT_BASED:
-                    await self._attempt_start_action(action_entity, "start_routine")
+                    await self._attempt_start_action(action_entity)
 
     def cancel_action_task(self, action_id: str) -> None:
         """Cancel the task for the given action."""
@@ -3139,7 +3148,7 @@ class RascalScheduler(BaseScheduler):
                     await self._reschedule_handler(event)
 
         _LOGGER.info(
-            "(_start_action) Start action %s at %s vs scheduled start time: %s",
+            "Start action %s at %s vs scheduled start time: %s",
             action.action_id,
             datetime.now(),
             action_lock.start_time,
@@ -3147,7 +3156,7 @@ class RascalScheduler(BaseScheduler):
         self._hass.data["rasc_events"].append((datetime.now().strftime("%H:%M:%S.%f")[:-3], f"Start {action.action_id}"))
         self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
 
-    async def _attempt_start_action(self, action: ActionEntity, parent: str = "") -> None:
+    async def _attempt_start_action(self, action: ActionEntity) -> None:
         """Start the given action if action start method is event-based."""
         _LOGGER.debug("Try to start the action %s", action.action_id)
 
@@ -3174,25 +3183,18 @@ class RascalScheduler(BaseScheduler):
                 return
 
             _LOGGER.info(
-                "(%s) (_attempt_start_action) Start action %s at %s vs scheduled start time: %s, start_requested: %s, %d",
-                parent,
+                "Start action %s at %s vs scheduled start time: %s",
                 action.action_id,
                 datetime.now(),
                 action_lock.start_time,
-                action.start_requested,
-                action.__hash__()
             )
 
             if not self._is_action_ready(action):
                 _LOGGER.info("Action %s is not ready to start", action.action_id)
                 return
 
-            # _LOGGER.info(
-            #     "(_attempt_start_action) Start action %s at %s vs scheduled start time: %s",
-            #     action.action_id,
-            #     datetime.now(),
-            #     action_lock.start_time,
-            # )
+            _, end_time = action_lock.time_range
+            action_lock.move_to(datetime.now(), end_time)
             self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
             action.start_requested = True
 
@@ -3252,26 +3254,6 @@ class RascalScheduler(BaseScheduler):
         if not routine_info.pass_eligibility:
             return False
 
-        # Check if the action reach the start time
-        target_entities = get_target_entities(self._hass, action.action)
-        for entity in target_entities:
-            entity_id = get_entity_id_from_number(self._hass, entity)
-
-            action_lock = self.get_action_info(action.action_id, entity_id)
-            if not action_lock:
-                raise ValueError(
-                    "Action {}'s schedule information on entity {} is missing.".format(
-                        action.action_id, entity_id
-                    )
-                )
-            if action_lock.start_time > datetime.now():
-                _LOGGER.debug(
-                    "Action %s's start time %s hasn't come",
-                    action.action_id,
-                    action_lock.start_time,
-                )
-                return False
-
         if self.action_start_method == START_EVENT_BASED:
             # Check if the previous actions on the common entities are over
             if not self._are_prev_actions_over(action):
@@ -3280,6 +3262,27 @@ class RascalScheduler(BaseScheduler):
             # Check if the parent dependencies from the same routine are satisfied
             if not self._are_parent_deps_satisfied(action):
                 return False
+
+        else:
+            # Check if the action reach the start time
+            target_entities = get_target_entities(self._hass, action.action)
+            for entity in target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+
+                action_lock = self.get_action_info(action.action_id, entity_id)
+                if not action_lock:
+                    raise ValueError(
+                        "Action {}'s schedule information on entity {} is missing.".format(
+                            action.action_id, entity_id
+                        )
+                    )
+                if action_lock.start_time > datetime.now():
+                    _LOGGER.debug(
+                        "Action %s's start time %s hasn't come",
+                        action.action_id,
+                        action_lock.start_time,
+                    )
+                    return False
 
         return True
 
@@ -3304,7 +3307,6 @@ class RascalScheduler(BaseScheduler):
         async with self.handle_event_lock:
             if self._reschedule_handler is not None:
                 await self._reschedule_handler(event)
-                await self._start_ready_actions()
 
             event_type: Optional[str] = event.data.get(CONF_TYPE)
             entity_id: Optional[str] = event.data.get(CONF_ENTITY_ID)
@@ -3328,6 +3330,8 @@ class RascalScheduler(BaseScheduler):
                 return
             if not action:
                 return
+
+            should_trigger_fcfs = False
 
             if event_type == RASC_ACK:
                 if not self.is_action_ack(action, entity_id):
@@ -3420,10 +3424,14 @@ class RascalScheduler(BaseScheduler):
 
                 self._set_action_completed(action_id)
 
-                await self._run_next_action(action, True)
+                should_trigger_fcfs = await self._run_next_action(action, True)
 
             else:
                 output_all(_LOGGER, lock_queues=self._lineage_table.lock_queues)
+
+            await self._start_ready_actions()
+        if self._scheduling_policy == FCFS and should_trigger_fcfs:
+            await self._start_ready_routines_fcfs()
 
     async def _start_ready_actions(self) -> None:
         """Start the ready actions."""
@@ -3436,7 +3444,7 @@ class RascalScheduler(BaseScheduler):
                 if action.start_requested:
                     continue
             if self._is_action_ready(action):
-                await self._attempt_start_action(action, "start_ready_action")
+                await self._attempt_start_action(action)
 
     def _return_lock(self, action_id: str, entity_id: str) -> bool:
         """Check if the given action returns the lock."""
@@ -3678,7 +3686,7 @@ class RascalScheduler(BaseScheduler):
                 return False
         return satisfied
 
-    async def _run_next_action(self, action: ActionEntity, is_complete: bool = False) -> None:
+    async def _run_next_action(self, action: ActionEntity, is_complete: bool = False) -> bool:
         """Run the entity's next action."""
         # Start next actions on the same entities
         if self.action_start_method == START_EVENT_BASED:
@@ -3692,7 +3700,7 @@ class RascalScheduler(BaseScheduler):
                 )
                 if not next_action:
                     continue
-                await self._attempt_start_action(next_action.action, "run_next_action")
+                await self._attempt_start_action(next_action.action)
 
         # Start next actions in the same routine
         # This is not the end of the routine
@@ -3702,9 +3710,11 @@ class RascalScheduler(BaseScheduler):
                     if self.action_start_method == START_TIME_BASED:
                         self.create_action_task(child)
                     elif self.action_start_method == START_EVENT_BASED:
-                        await self._attempt_start_action(child, "run_next_action")
+                        await self._attempt_start_action(child)
                 elif is_complete:
                     self._handle_end_of_routine(get_routine_id(action.action_id))
+                    return True
+        return False
 
     def _handle_end_of_routine(self, routine_id: str) -> None:
         """Handle the end of the routine."""
@@ -3723,8 +3733,6 @@ class RascalScheduler(BaseScheduler):
         self._metrics.save_metrics(final=True)
 
         self._hass.bus.async_fire("routine_ended", {CONF_ROUTINE_ID: routine_id})
-        if self._scheduling_policy == FCFS:
-            self._start_ready_routines_fcfs()
 
     async def _start_ready_routines_fcfs(self) -> None:
         """Start the ready routine by fcfs."""
@@ -3746,6 +3754,7 @@ class RascalScheduler(BaseScheduler):
                 )
                 ready_routines.append(routine_id)
 
+        _LOGGER.info("Start the ready routines by fcfs, ready routines: %s", ready_routines)
         for routine_id in ready_routines:
             routine_info = self._wait_queue[routine_id]
             if not routine_info:

@@ -527,7 +527,6 @@ class ActionEntity:
 
     async def _async_call_service_step(self) -> None:
         """Call the service specified in the action."""
-        _LOGGER.info("Call service %s", self.action_id)
         self._step_log("call service")
         if self.variables is not None:
             params = service.async_prepare_call_from_config(

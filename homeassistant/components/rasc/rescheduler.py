@@ -566,18 +566,15 @@ class BaseRescheduler(TimeLineScheduler):
                     if not free_st_time:
                         # while a source action is not found, skip the action
                         if action_id not in affected_action_ids:
-                            LOGGER.debug("Skip action %s in entity %s", action_id, entity_id)
                             continue
                         # record the first action's start time
                         # to create a free slot later
 
-                        LOGGER.debug("First affected action %s in entity %s", action_id, entity_id)
                         free_st_time = action_lock.start_time
 
                     # after a source action has been found while traversing in ascending
                     # chronological order, add every action to the descheduled actions
                     # (including the found source action)
-                    LOGGER.debug("Later affected action %s in entity %s", action_id, entity_id)
                     actions_to_remove.append(action_id)
                 # LOGGER.debug(f"{actions_to_remove=}")
 
@@ -982,10 +979,7 @@ class BaseRescheduler(TimeLineScheduler):
             # )
 
             # find the action with the shortest duration
-            # if 'light.front_door_light' in wait_queues:
-            #     LOGGER.debug(f"{wait_queues['light.front_door_light']=}")
             shortest_action = heapq.heappop(wait_queues[next_entity_id])[1]
-            LOGGER.info("Rescheduling %s", shortest_action)
             if shortest_action in visited:
                 if not wait_queues[next_entity_id]:
                     del wait_queues[next_entity_id]
@@ -1031,15 +1025,10 @@ class BaseRescheduler(TimeLineScheduler):
                         shortest_action_routine_id
                     ] = old_serialization_order[shortest_action_routine_id]
 
-                LOGGER.debug("Descheduled actions after serializabilization: %s", list(descheduled_actions.keys()))
             # add children of the chosen action to the affected entities' wait queues
             for child in shortest_action.all_children:
                 if child.is_end_node:
                     continue
-
-                # if shortest_action.action_id.startswith("1715721247625") and shortest_action.action_id.endswith(".8"):
-                #     if child.action_id.endswith(".11"):
-                #         LOGGER.debug(f"hello\n{child.all_parents=}\n{self._lineage_table.lock_queues[next_entity_id]=}")
 
                 # LOGGER.debug(f"{child.action_id}'s parents: {child.all_parents}")
                 # eligible children are those whose parents are all scheduled
@@ -2521,13 +2510,9 @@ class RascalRescheduler:
                     "Immutable serialization order: %s",
                     immutable_serialization_order,
                 )
-            for entity_id, lock_queue in self._rescheduler.lineage_table.lock_queues.items():
-                LOGGER.info("Entity %s: actions before deschedule: %s", entity_id, list(lock_queue.keys()))
             affected_actions = self._rescheduler.deschedule_affected_actions(
                 set(affected_actions.keys())
             )
-            for entity_id, lock_queue in self._rescheduler.lineage_table.lock_queues.items():
-                LOGGER.info("Entity %s: actions after deschedule: %s", entity_id, list(lock_queue.keys()))
             if serializability and immutable_serialization_order:
                 descheduled_actions = (
                     self._rescheduler.apply_serialization_order_dependencies(
