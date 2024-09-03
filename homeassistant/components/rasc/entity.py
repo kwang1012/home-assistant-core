@@ -836,10 +836,10 @@ class Queue(Generic[_KT, _VT]):
         """Return the string representation of the queue."""
         if self._keys and isinstance(self.top()[0], datetime):
             text = ", ".join(
-                [time_range_to_string(item) for item in self._data.items()]
+                [time_range_to_string((key, self._data[key])) for key in self._keys]
             )
         else:
-            text = ", ".join([f"{key}: {value}" for key, value in self._data.items()])
+            text = ", ".join([f"{key}: {self._data[key]}" for key in self._keys])
         return f"Queue({text})"
 
 
