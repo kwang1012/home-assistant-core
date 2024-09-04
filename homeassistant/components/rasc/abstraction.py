@@ -355,7 +355,6 @@ class RASCAbstraction:
     ]:
         """Execute a service."""
 
-        # LOGGER.info(f"{service_call.service=} {service_call.data=}")
         # for response wait-notify
         context = Context()
 

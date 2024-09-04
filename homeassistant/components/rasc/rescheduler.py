@@ -126,7 +126,7 @@ class BaseRescheduler(TimeLineScheduler):
                         action_id, entity_id
                     )
                 )
-            if action_lock.start_time < st_time:
+            if action_lock.action.start_requested:
                 # check this only if the action finished early
                 if diff <= timedelta(0):
                     continue
@@ -181,8 +181,7 @@ class BaseRescheduler(TimeLineScheduler):
                     self._move_device_schedule(entity_id, st_time, diff)
                 )
             )
-        for task in tasks:
-            await task
+        await asyncio.gather(*tasks)
         return self._lineage_table
 
     def RV(
@@ -211,7 +210,12 @@ class BaseRescheduler(TimeLineScheduler):
         # the heap will be a list of ActionInfo objects
         # next_action_heap = list[tuple[datetime, ActionInfo]]()
         next_action_heap = list[ActionInfo]()
+        heapq.heapify(next_action_heap)
         for entity_id, lock_queue in lock_queues.items():
+
+            # LOGGER.info("%s: Free slots status before return: %s", entity_id, [f"{datetime_to_string(st)}-{datetime_to_string(et)}" for st, et in free_slots[entity_id].items()])
+
+            # add the action's old time range to all the affected entities' free slots
             for action_id, action_lock in lock_queue.items():
                 if not action_lock:
                     raise ValueError(
@@ -220,16 +224,21 @@ class BaseRescheduler(TimeLineScheduler):
                         )
                     )
 
+                if action_lock.action_id.endswith(".0"):
+                    LOGGER.info("In RV: Action ends %s, %s", action_lock.end_time, action_lock.__hash__())
                 # skip the action if it is already running before st_time
-                if action_lock.action.start_requested:
+                if self._is_action_running(action_lock.action_id, st_time):
                     continue
-                # if action_lock.start_time < st_time:
-                #     continue
 
                 # add the action to the heap, ordered by the current start time
+                # self._return_free_slot(entity_id, action_id)
                 heapq.heappush(next_action_heap, action_lock)
                 break
 
+        # for action_lock in next_action_heap:
+        #     entities = get_target_entities(self._hass, action_lock.action.action)
+
+        # LOGGER.info("Trying to move %s", [action_info.action_id for action_info in next_action_heap])
         visited = set[str]()
         while next_action_heap:
             action_lock = heapq.heappop(next_action_heap)
@@ -267,9 +276,10 @@ class BaseRescheduler(TimeLineScheduler):
             if max_prev_action_end_time:
                 action_st = max(action_st, max_prev_action_end_time)
 
-            # add the action's old time range to all the affected entities' free slots
+            LOGGER.info(f"{action_id=} {action_st=} {max_parent_end_time=} {max_prev_action_end_time=}")
+
             for entity_id in entities:
-                self._return_free_slot(entity_id, action_id)
+                self._return_free_slot(entity_id, action_lock.action.action_id)
 
             # move the action back to the action slot
             for entity_id in entities:
@@ -277,6 +287,10 @@ class BaseRescheduler(TimeLineScheduler):
                     raise ValueError("Entity %s has no free slots." % entity_id)
                 # update the entity's free slots
                 action_end = action_st + action.length(entity_id)
+                LOGGER.info("Try to schedule action %s to %s-%s on %s", action_id, datetime_to_string(action_st), datetime_to_string(action_end), entity_id)
+                LOGGER.info("Lock queue status: %s", [f"{action_info.action_id}: {datetime_to_string(action_info.start_time)}-{datetime_to_string(action_info.end_time)}" for action_info in self._lineage_table.lock_queues[entity_id].values()])
+                LOGGER.info("Free slots status: %s", [f"{datetime_to_string(st)}-{datetime_to_string(et)}" for st, et in free_slots[entity_id].items()])
+
                 free_slot = self._find_slot_including_time_range(
                     free_slots[entity_id], (action_st, action_end), entity_id
                 )
@@ -297,10 +311,7 @@ class BaseRescheduler(TimeLineScheduler):
                             action_id, entity_id
                         )
                     )
-                LOGGER.info(
-                    "Move action %s to %s on %s", action_id, action_st, entity_id
-                )
-                action_lock.move_to(action_st, action_end)
+                action_lock.move_to(action_st, action_end, entity_id)
 
                 # update the schedule metrics
                 rv_metrics.record_scheduled_action_start(
@@ -319,6 +330,7 @@ class BaseRescheduler(TimeLineScheduler):
 
         rv_metrics.save_metrics()
 
+        LOGGER.info("==================== RV ends ====================")
         return self._lineage_table
 
     def early_start(self) -> LineageTable:
@@ -1738,6 +1750,8 @@ class BaseRescheduler(TimeLineScheduler):
                                 parent_action_id, entity_id
                             )
                         )
+                    # if parent_lock.action_id.endswith(".0"):
+                    #     LOGGER.info(f"{parent_lock.end_time=} {parent_lock.__hash__()=}")
                     if dependency in (RASC_ACK, RASC_START):
                         parent_end_time = parent_lock.start_time
                     elif dependency == RASC_COMPLETE:
@@ -2420,14 +2434,14 @@ class RascalRescheduler:
         self, time: datetime = datetime.now(), extra: timedelta = timedelta(0)
     ) -> bool:
         old_sched = self._scheduler.lineage_table
-        self._rescheduler.lineage_table = old_sched
+        # self._rescheduler.lineage_table = old_sched
         if self._resched_policy not in (RV, EARLY_START):
             return True
         new_sched = await self._rescheduler.move_device_schedules(time, extra)
         if not new_sched:
-            # self._apply_schedule(old_sched)
+            self._apply_schedule(old_sched)
             return False
-        self._apply_schedule(new_sched)
+        # self._apply_schedule(new_sched)
         return True
 
     async def _reschedule(
@@ -2459,9 +2473,14 @@ class RascalRescheduler:
         st_time, old_end_time = action_lock.time_range
         new_end_time = old_end_time + diff
         metrics = ScheduleMetrics(sm=self._scheduler.metrics)
-        metrics.record_action_end(new_end_time, entity_id, action_id)
+        if st_time > new_end_time:
+            LOGGER.error("The new end time is before the start time. %s %s", st_time, new_end_time)
+            # raise ValueError("The new end time is before the start time. %s %s" % (st_time, new_end_time))
         action_lock.move_to(st_time, new_end_time)
+        if action_lock.action_id.endswith(".0"):
+            LOGGER.info("Action ends %s %s, %s", old_end_time, action_lock.end_time, action_lock.__hash__())
         if diff.total_seconds() < 0:
+            metrics.record_action_end(new_end_time, entity_id, action_id)
             # return part of the free slots
             free_slots = old_lt.free_slots[entity_id]
             found = False
@@ -2483,13 +2502,22 @@ class RascalRescheduler:
         new_lt = None
         new_so = self._rescheduler.serialization_order
 
+        _action_lock = self._rescheduler.lineage_table.lock_queues[entity_id][action_id]
+        # if _action_lock.action_id.endswith(".0"):
+        #     LOGGER.info("After copy: Action ends %s %s, %s", old_end_time, _action_lock.end_time, _action_lock.__hash__())
         if self._resched_policy in (RV, EARLY_START) and diff.total_seconds() > 0:
             success = await self._move_device_schedules(old_end_time, diff)
             if not success:
                 raise ValueError("Failed to move device schedules.")
 
+        # if _action_lock.action_id.endswith(".0"):
+        #     LOGGER.info("After move: Action ends %s %s, %s", old_end_time, _action_lock.end_time, _action_lock.__hash__())
+
         if self._resched_policy in (RV):
-            new_lt = self._rescheduler.RV(new_end_time, metrics)
+            try:
+                new_lt = self._rescheduler.RV(min(new_end_time, old_end_time), metrics)
+            except ValueError as e:
+                LOGGER.error("Failed to reschedule: %s", e)
         elif self._resched_policy in (EARLY_START):
             new_lt = self._rescheduler.early_start()
         elif self._resched_policy in (SJFWO, SJFW, OPTIMALW, OPTIMALWO):
@@ -2566,6 +2594,7 @@ class RascalRescheduler:
                     immutable_serialization_order,
                     metrics,
                 )
+        LOGGER.info("============= Reschedule ends =============")
         if not new_lt:
             # self._apply_schedule(old_lt, old_so)
             return
@@ -2582,7 +2611,6 @@ class RascalRescheduler:
             "reschedule_event",
             {"from": start_time, "to": end_time, "diff": diff.total_seconds()},
         )
-        LOGGER.info("============= Reschedule ends =============")
 
     def _apply_schedule(
         self,
@@ -2591,7 +2619,7 @@ class RascalRescheduler:
     ) -> None:
         """Apply the new schedule."""
 
-        LOGGER.debug("Start applying the new schedule.")
+        LOGGER.info("Start applying the new schedule.")
         for entity_id in schedule.lock_queues:
             action_ids = set(schedule.lock_queues[entity_id].keys())
             orginal_action_ids = set(self._scheduler.lineage_table.lock_queues[entity_id].keys())
@@ -2620,7 +2648,7 @@ class RascalRescheduler:
                 self._rescheduler.serialization_order[routine_id] = routine_info
                 self._scheduler.serialization_order[routine_id] = routine_info
 
-        LOGGER.debug("Finish applying the new schedule.")
+        LOGGER.info("Finish applying the new schedule.")
 
     def _init_timer_delay(self, event: Event) -> timedelta:
         entity_id: Optional[str] = event.data.get(ATTR_ENTITY_ID)
@@ -2835,9 +2863,9 @@ class RascalRescheduler:
             raise ValueError("Entity ID or action ID is missing in the event.")
         self._cancel_overtime_check(event)
         LOGGER.info("Diff: %f", diff.total_seconds())
-        if diff.total_seconds() >= -MIN_RESCHEDULE_TIME:
-            LOGGER.info("Undertime too low, not rescheduling")
-            return
+        # if diff.total_seconds() >= -MIN_RESCHEDULE_TIME:
+        #     LOGGER.info("Undertime too low, not rescheduling")
+        #     return
 
         LOGGER.info(
             "Handling %s's undertime on entity %s, diff: %s",

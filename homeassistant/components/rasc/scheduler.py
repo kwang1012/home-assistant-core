@@ -778,18 +778,31 @@ class ActionInfo:
             self._end_time,
         )
 
-    def move_to(self, new_start_time: datetime, new_end_time: datetime) -> None:
+    def move_to(self, new_start_time: datetime, new_end_time: datetime = None, entity_id = None) -> None:
         """Move to new time range."""
+        if entity_id:
+            _LOGGER.info(
+                "Move action %s to %s-%s on %s", self.action_id, new_start_time, new_end_time, entity_id
+            )
+        else:
+            _LOGGER.info(
+                "Move action %s to %s-%s", self.action_id, new_start_time, new_end_time
+            )
         self._start_time = new_start_time
         self._end_time = new_end_time
 
     def __lt__(self, other: ActionInfo) -> bool:
         """Compare two action info."""
-        if self._start_time < other.start_time:
+        if self.action.start_requested and not other.action.start_requested:
             return True
-        if self._start_time == other.start_time:
-            return self.action_id < other.action_id
-        return False
+        elif not self.action.start_requested and other.action.start_requested:
+            return False
+        else:
+            if self._start_time < other.start_time:
+                return True
+            if self._start_time == other.start_time:
+                return self.action_id < other.action_id
+            return False
 
     def __repr__(self) -> str:
         """Return the string representation of the action info."""
@@ -3193,10 +3206,13 @@ class RascalScheduler(BaseScheduler):
                 _LOGGER.info("Action %s is not ready to start", action.action_id)
                 return
 
-            _, end_time = action_lock.time_range
-            action_lock.move_to(datetime.now(), end_time)
-            self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
             action.start_requested = True
+            # start_time, end_time = action_lock.time_range
+            # action_lock.move_to(now, now + end_time - start_time)
+            if action_lock.start_time > datetime.now():
+                _LOGGER.error("Action %s's start time hasn't come", action.action_id)
+            self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
+
 
     def _is_action_ready(self, action: ActionEntity) -> bool:
         """Check if the given action acquire all the associated locks to get executed."""

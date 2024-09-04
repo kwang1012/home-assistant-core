@@ -97,7 +97,7 @@ def fire(
 ):
     """Fire rasc response."""
     if logger:
-        logger.info(
+        logger.debug(
             "%s %s %s: %s",
             entity_id,
             action,

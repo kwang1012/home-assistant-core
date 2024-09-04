@@ -686,7 +686,10 @@ class Queue(Generic[_KT, _VT]):
             _LOGGER.error("Key %s already in the queue, not appended", key)
         self._keys.append(key)
         if isinstance(key, datetime):
-            self._keys = sorted(self._keys, key=functools.cmp_to_key(lambda x, y: (x - y).total_seconds()))
+            self._keys = sorted(
+                self._keys,
+                key=functools.cmp_to_key(lambda x, y: (x - y).total_seconds()),
+            )
         self._data[key] = value
 
     def __delitem__(self, key: _KT) -> None:

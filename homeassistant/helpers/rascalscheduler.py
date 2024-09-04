@@ -113,8 +113,10 @@ def string_to_datetime(dt: str) -> datetime:
     )
 
 
-def datetime_to_string(dt: datetime) -> str:
+def datetime_to_string(dt: datetime | None) -> str:
     """Convert datetime to string."""
+    if dt is None:
+        return "None"
     return dt.strftime("%H:%M:%S.%f")
 
 
