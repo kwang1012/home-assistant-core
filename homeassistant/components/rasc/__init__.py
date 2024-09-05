@@ -329,7 +329,10 @@ def examine_final_state(hass: HomeAssistant, config: ConfigType):
     path = "homeassistant/components/rasc/datasets"
     # with open(os.path.join(path, "all_final_state.json"), "w") as f:
     #     json.dump(final_states, f, indent=4)
-    with open(os.path.join(path, "morning_final_state.json")) as f:
+    dataset = config["rasc"][CONF_ROUTINE_ARRIVAL_FILENAME].split(".")[0].split("_")[1]
+    if "debug" in dataset:
+        return
+    with open(os.path.join(path, f"{dataset}_final_state.json")) as f:
         fcfs_states = json.load(f)
 
     differ_states = {}
