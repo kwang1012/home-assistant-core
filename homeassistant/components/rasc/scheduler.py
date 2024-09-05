@@ -1389,15 +1389,17 @@ class BaseScheduler:
         slot: tuple[datetime, Optional[datetime]],
         action_slot: tuple[datetime, datetime],
         free_slots: Queue[datetime, datetime],
+        entity_id: str | None = None,
     ) -> datetime:
         """Insert the action to the current time slot and then return the expected end time of the new action."""
         slot_st, slot_end = slot
         action_st, action_end = action_slot
 
-        _LOGGER.debug(
-            "Schedule action in %s of slot %s",
+        _LOGGER.info(
+            "Schedule action in %s of slot %s on entity: %s",
             time_range_to_string(action_slot),
             time_range_to_string(slot),
+            entity_id or ""
         )
 
         # To avoid many fragmentations
@@ -1927,10 +1929,15 @@ class TimeLineScheduler(BaseScheduler):
         new_action: ActionEntity,
     ) -> tuple[datetime | None, Optional[set[str]], dict[str, datetime]]:
         """Get available time slot by timeline."""
-        _LOGGER.debug(
+        _LOGGER.info(
             "Free slots for entity %s: %s",
             entity_id,
             free_slots[entity_id],
+        )
+        _LOGGER.info(
+            "Lock queue for entity %s: %s",
+            entity_id,
+            [f"{action_id}: {datetime_to_string(action_lock.start_time)}-{datetime_to_string(action_lock.end_time)}" for action_id, action_lock in self._lineage_table.lock_queues[entity_id].items()],
         )
 
         conflict = None
@@ -2011,7 +2018,6 @@ class TimeLineScheduler(BaseScheduler):
         for action in self._lineage_table.lock_queues[entity_id].values():
             if not action:
                 continue
-            _LOGGER.info(f"Action {action.action_id} end time: {action.end_time} gap start time: {gap_start_time}")
             if action.end_time <= gap_start_time and get_routine_id(
                 action.action_id
             ) != get_routine_id(new_action.action_id):
@@ -2029,7 +2035,6 @@ class TimeLineScheduler(BaseScheduler):
     ) -> set[str]:
         """Get postset."""
 
-        _LOGGER.info(f"{gap=}")
         gap_end_time = gap[1]
         postset = set[str]()
         if not gap_end_time:
@@ -2038,7 +2043,6 @@ class TimeLineScheduler(BaseScheduler):
         for action in self._lineage_table.lock_queues[entity_id].values():
             if not action:
                 continue
-            _LOGGER.info(f"Action {action.action_id} start time: {action.start_time} gap end time: {gap_end_time}")
             if action.start_time >= gap_end_time and get_routine_id(
                 action.action_id
             ) != get_routine_id(new_action.action_id):
@@ -2146,6 +2150,7 @@ class TimeLineScheduler(BaseScheduler):
                 group_slot_start_time[entity_id] = start_time
 
         actual_start_time = max(group_action_start_time.values())
+        _LOGGER.info(f"{actual_start_time=}")
 
         for entity_id, start_time in group_slot_start_time.items():
             action_st = max(actual_start_time, now[entity_id])
@@ -2155,6 +2160,7 @@ class TimeLineScheduler(BaseScheduler):
                 (start_time, free_slots[entity_id][start_time]),
                 (action_st, action_end),
                 free_slots[entity_id],
+                entity_id
             )
 
             self.schedule_lock(action, (action_st, action_end), entity_id)
@@ -3245,10 +3251,8 @@ class RascalScheduler(BaseScheduler):
                 return
 
             action.start_requested = True
-            # start_time, end_time = action_lock.time_range
-            # action_lock.move_to(now, now + end_time - start_time)
             if action_lock.start_time > datetime.now():
-                _LOGGER.error("Action %s's start time hasn't come", action.action_id)
+                _LOGGER.error("Action %s's start time hasn't come. start time: %s, now: %s", action.action_id, datetime_to_string(action_lock.start_time), datetime_to_string(datetime.now()))
             self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
 
 
@@ -3339,6 +3343,17 @@ class RascalScheduler(BaseScheduler):
                     return False
 
         return True
+
+    def _are_prev_routine_over(self, action: ActionEntity) -> bool:
+        """Check if the previous routines on the serialization order are over."""
+        routine_id = get_routine_id(action.action_id)
+        routine_info = self._serialization_order[routine_id]
+        if not routine_info:
+            raise ValueError("Routine %s is not found in the serialization order" % routine_id)
+        prev_routine = self._serialization_order.prev(routine_id)
+        if not prev_routine:
+            return True
+        return prev_routine.routine_completed
 
     def _are_prev_actions_over(self, action: ActionEntity) -> bool:
         target_entities = get_target_entities(self._hass, action.action)

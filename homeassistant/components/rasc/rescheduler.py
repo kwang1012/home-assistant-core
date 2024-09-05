@@ -63,7 +63,7 @@ from homeassistant.helpers.rascalscheduler import (
 from homeassistant.helpers.typing import ConfigType
 
 from .abstraction import RASCAbstraction
-from .const import DOMAIN, MIN_RESCHEDULE_TIME, RASC_ACK
+from .const import DOMAIN, RASC_ACK
 from .entity import ActionEntity, Queue, get_entity_id_from_number
 from .log import set_logger
 from .metrics import ScheduleMetrics
@@ -556,6 +556,8 @@ class BaseRescheduler(TimeLineScheduler):
         descheduled_actions = dict[str, ActionEntity]()
         extra_affected_action_ids = affected_action_ids.copy()
 
+        LOGGER.info(f"{affected_action_ids=}")
+
         while extra_affected_action_ids:
             affected_action_ids.clear()
             affected_action_ids.update(extra_affected_action_ids)
@@ -626,9 +628,6 @@ class BaseRescheduler(TimeLineScheduler):
                     if not prev_st_time:
                         prev_st_time = free_st_time
                     free_slots[prev_st_time] = None
-
-                self._lineage_table.free_slots[entity_id]
-
 
         return descheduled_actions
 
@@ -2474,8 +2473,7 @@ class RascalRescheduler:
         new_end_time = old_end_time + diff
         metrics = ScheduleMetrics(sm=self._scheduler.metrics)
         if st_time > new_end_time:
-            LOGGER.error("The new end time is before the start time. %s %s", st_time, new_end_time)
-            # raise ValueError("The new end time is before the start time. %s %s" % (st_time, new_end_time))
+            LOGGER.error("%s's new end time is before the start time. %s %s", action_id, datetime_to_string(st_time), datetime_to_string(new_end_time))
         action_lock.move_to(st_time, new_end_time)
         if action_lock.action_id.endswith(".0"):
             LOGGER.info("Action ends %s %s, %s", old_end_time, action_lock.end_time, action_lock.__hash__())
@@ -2546,6 +2544,7 @@ class RascalRescheduler:
             affected_actions = self._rescheduler.deschedule_affected_actions(
                 set(affected_actions.keys())
             )
+            # LOGGER.info(f"{affected_actions=}")
             if serializability and immutable_serialization_order:
                 descheduled_actions = (
                     self._rescheduler.apply_serialization_order_dependencies(
