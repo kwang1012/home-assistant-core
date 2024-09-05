@@ -1794,14 +1794,19 @@ class TimeLineScheduler(BaseScheduler):
 
     def get_next_start_time(
         self, routine: RoutineEntity, preset: set[str], postset: set[str]
-    ) -> datetime:
+    ) -> dict[str, datetime]:
         """Get then next start time for the given routine."""
         # The idea is to reschedule the routine after the routines in the postset.
 
         _LOGGER.info(f"{preset=}, {postset=}")
         target_entities: list[str] = []
         candidates: list[datetime] = []
+        next_start_time: dict[str, datetime] = {
+            entity_id: datetime.now()
+            for entity_id in get_routine_targets(self._hass, routine)
+        }
 
+        # get target entities
         for action in list(routine.actions.values())[:-1]:
             entities = get_target_entities(self._hass, action.action)
             for entity in entities:
@@ -1810,18 +1815,9 @@ class TimeLineScheduler(BaseScheduler):
                 if entity_id not in target_entities:
                     target_entities.append(entity_id)
 
-        for routine_id_in_postset in postset:
-            routine_in_postset = self._serialization_order[routine_id_in_postset]
-            if not routine_in_postset:
-                raise ValueError(
-                    "The routine {} in the postset is missing from the serialization order".format(
-                        routine_id_in_postset
-                    )
-                )
-
-            for action in list(routine_in_postset.routine.actions.values())[:-1]:
+        for routine_id in preset.union(postset):
+            for action in self._serialization_order[routine_id].routine.actions.values():
                 entities = get_target_entities(self._hass, action.action)
-                # find_candidate = False
                 for entity in entities:
                     entity_id = get_entity_id_from_number(self._hass, entity)
 
@@ -1833,44 +1829,73 @@ class TimeLineScheduler(BaseScheduler):
                                     action.action_id, entity_id
                                 )
                             )
-                        candidates.append(action_info.end_time)
-                        # find_candidate = True
 
-                # Only require to identify the earliest action end time within the existing routines that may cause a serializability conflict.
-                # if find_candidate:
-                #     break
+                        if entity_id not in next_start_time or next_start_time[entity_id] < action_info.end_time:
+                            next_start_time[entity_id] = action_info.end_time
+                        #.candidates.append(action_info.end_time)
 
-        for routine_id_in_preset in preset:
-            routine_in_preset = self._serialization_order[routine_id_in_preset]
-            if not routine_in_preset:
-                raise ValueError(
-                    "The routine {} in the preset is missing from the serialization order".format(
-                        routine_id_in_preset
-                    )
-                )
+        # for routine_id_in_postset in postset:
+        #     routine_in_postset = self._serialization_order[routine_id_in_postset]
+        #     if not routine_in_postset:
+        #         raise ValueError(
+        #             "The routine {} in the postset is missing from the serialization order".format(
+        #                 routine_id_in_postset
+        #             )
+        #         )
 
-            for action in list(routine_in_preset.routine.actions.values())[:-1]:
-                entities = get_target_entities(self._hass, action.action)
-                # find_candidate = False
-                for entity in entities:
-                    entity_id = get_entity_id_from_number(self._hass, entity)
+        #     for action in list(routine_in_postset.routine.actions.values())[:-1]:
+        #         entities = get_target_entities(self._hass, action.action)
+        #         # find_candidate = False
+        #         for entity in entities:
+        #             entity_id = get_entity_id_from_number(self._hass, entity)
 
-                    if entity_id in target_entities:
-                        action_info = self.get_action_info(action.action_id, entity_id)
-                        if not action_info:
-                            raise ValueError(
-                                "Action {}'s schedule info on entity {} is missing.".format(
-                                    action.action_id, entity_id
-                                )
-                            )
-                        candidates.append(action_info.end_time)
-                        # find_candidate = True
+        #             if entity_id in target_entities:
+        #                 action_info = self.get_action_info(action.action_id, entity_id)
+        #                 if not action_info:
+        #                     raise ValueError(
+        #                         "Action {}'s schedule info on entity {} is missing.".format(
+        #                             action.action_id, entity_id
+        #                         )
+        #                     )
+        #                 candidates.append(action_info.end_time)
+        #                 # find_candidate = True
 
-                # Only require to identify the earliest action end time within the existing routines that may cause a serializability conflict.
-                # if find_candidate:
-                #     break
-        _LOGGER.info(f"{candidates=}")
-        return max(candidates)
+        #         # Only require to identify the earliest action end time within the existing routines that may cause a serializability conflict.
+        #         # if find_candidate:
+        #         #     break
+
+        # for routine_id_in_preset in preset:
+        #     routine_in_preset = self._serialization_order[routine_id_in_preset]
+        #     if not routine_in_preset:
+        #         raise ValueError(
+        #             "The routine {} in the preset is missing from the serialization order".format(
+        #                 routine_id_in_preset
+        #             )
+        #         )
+
+        #     for action in list(routine_in_preset.routine.actions.values())[:-1]:
+        #         entities = get_target_entities(self._hass, action.action)
+        #         # find_candidate = False
+        #         for entity in entities:
+        #             entity_id = get_entity_id_from_number(self._hass, entity)
+
+        #             if entity_id in target_entities:
+        #                 action_info = self.get_action_info(action.action_id, entity_id)
+        #                 if not action_info:
+        #                     raise ValueError(
+        #                         "Action {}'s schedule info on entity {} is missing.".format(
+        #                             action.action_id, entity_id
+        #                         )
+        #                     )
+        #                 candidates.append(action_info.end_time)
+        #                 # find_candidate = True
+
+        #         # Only require to identify the earliest action end time within the existing routines that may cause a serializability conflict.
+        #         # if find_candidate:
+        #         #     break
+        #_LOGGER.info(f"{candidates=}")
+        #return max(candidates)
+        return next_start_time
 
     def conflict_determined_serializability_in_case_tl(
         self, preset: set[str], postset: set[str]
@@ -1900,7 +1925,7 @@ class TimeLineScheduler(BaseScheduler):
         preset: set[str],
         postset: set[str],
         new_action: ActionEntity,
-    ) -> tuple[datetime | None, Optional[set[str]]]:
+    ) -> tuple[datetime | None, Optional[set[str]], dict[str, datetime]]:
         """Get available time slot by timeline."""
         _LOGGER.debug(
             "Free slots for entity %s: %s",
@@ -1968,6 +1993,7 @@ class TimeLineScheduler(BaseScheduler):
 
         preset.update(cur_preset)
         postset.update(cur_postset)
+
 
         return None, conflict
 
@@ -2050,7 +2076,7 @@ class TimeLineScheduler(BaseScheduler):
     def schedule_all_action_in_case_tl(
         self,
         action: ActionEntity,
-        now: datetime,
+        now: dict[str, datetime],
         free_slots: dict[str, Queue[datetime, datetime]],
         lock_leasing_status: dict[str, str],
         preset: set[str],
@@ -2062,9 +2088,9 @@ class TimeLineScheduler(BaseScheduler):
         max_end_time = now
 
         _LOGGER.debug(
-            "Action %s start scheduling at time %s",
+            "Action %s start scheduling at time",
             action.action_id,
-            datetime_to_string(now),
+            # datetime_to_string(now),
         )
 
         group_action_start_time: dict[str, datetime] = {}
@@ -2074,23 +2100,23 @@ class TimeLineScheduler(BaseScheduler):
             entity_id = get_entity_id_from_number(self._hass, entity)
 
             start_time, conflict = self.get_available_ts_in_case_tl(
-                now, free_slots, entity_id, lock_leasing_status, preset, postset, action
+                now[entity_id], free_slots, entity_id, lock_leasing_status, preset, postset, action
             )
 
             if not start_time:
                 _LOGGER.warning(
                     "Failed to find a time slot start at %s. Need to reschedule",
-                    now,
+                    now[entity_id],
                 )
                 return False, max_end_time, conflict
 
-            group_action_start_time[entity_id] = max(start_time, now)
+            group_action_start_time[entity_id] = max(start_time, now[entity_id])
             group_slot_start_time[entity_id] = start_time
 
         if not group_action_start_time:
             raise ValueError("No entities to schedule on!")
 
-        actual_start_time = now
+        actual_start_time = datetime.now()
         while not self.same_start_time(group_action_start_time):
             actual_start_time = max(group_action_start_time.values())
             group_action_start_time.clear()
@@ -2112,7 +2138,7 @@ class TimeLineScheduler(BaseScheduler):
                 if not start_time:
                     _LOGGER.warning(
                         "Failed to find a time slot start at %s. Need to reschedule",
-                        now,
+                        now[entity_id],
                     )
                     return False, max_end_time, conflict
 
@@ -2122,7 +2148,7 @@ class TimeLineScheduler(BaseScheduler):
         actual_start_time = max(group_action_start_time.values())
 
         for entity_id, start_time in group_slot_start_time.items():
-            action_st = max(actual_start_time, now)
+            action_st = max(actual_start_time, now[entity_id])
             action_end = action_st + action.length(entity_id)
 
             self.schedule_action(
@@ -2133,21 +2159,27 @@ class TimeLineScheduler(BaseScheduler):
 
             self.schedule_lock(action, (action_st, action_end), entity_id)
 
-            max_end_time = max(max_end_time, action_end)
+            max_end_time[entity_id] = max(max_end_time[entity_id], action_end)
 
         return True, max_end_time, None
 
     def schedule_routine_in_case_tl(
-        self, hass: HomeAssistant, routine: RoutineEntity, now: datetime
+        self, hass: HomeAssistant, routine: RoutineEntity, next_start_time: dict[str, datetime] | None = None
     ) -> tuple[bool, dict[str, str], Optional[set[str]]]:
         """Schedule the given routine."""
 
         _LOGGER.info("Start scheduling the routine %s", routine.routine_id)
         start = time.time()
 
+        if not next_start_time:
+            next_start_time = {
+                entity_id: datetime.now()
+                for entity_id in get_routine_targets(self._hass, routine)
+            }
+
         # Remove time slots before now
-        next_end_time = now  # + generate_duration(MAX_SCHEDULE_TIME)
-        self.remove_time_slots_before_now(next_end_time, self._lineage_table.free_slots)
+        next_end_time = next_start_time  # + generate_duration(MAX_SCHEDULE_TIME)
+        self.remove_time_slots_before_now(datetime.now(), self._lineage_table.free_slots)
 
         # Deep copy the free slots
         tmp_fs = copy.deepcopy(self._lineage_table.free_slots)
@@ -2195,7 +2227,7 @@ class TimeLineScheduler(BaseScheduler):
                 next_start_time = self.get_next_start_time(routine, preset, postset)
                 return (
                     False,
-                    {"next_start_time": datetime_to_string(next_start_time)},
+                    {"next_start_time": next_start_time},
                     conflict,
                 )
 
@@ -2213,7 +2245,7 @@ class TimeLineScheduler(BaseScheduler):
         script: dict[str, Any],
         config: dict[str, Any],
         routine: RoutineEntity,
-        prev_end_time: datetime,
+        prev_end_time: dict[str, datetime],
         free_slots: dict[str, Queue],
         lock_leasing_status: dict[str, str],
         preset: set[str],
@@ -2240,7 +2272,11 @@ class TimeLineScheduler(BaseScheduler):
                 if not success:
                     return False, next_end_time, conflict
 
-                next_end_time = max(next_end_time, item_end_time)
+                next_end_time = {
+                    entity_id: max(next_end_time[entity_id], item_end_time[entity_id])
+                    for entity_id in next_end_time.keys()
+                }
+                #next_end_time = max(next_end_time, item_end_time)
 
         elif CONF_SEQUENCE in script:
             for item in list(script.values())[0]:
@@ -2924,7 +2960,7 @@ class RascalScheduler(BaseScheduler):
                 lock_leasing_status,
                 conflict,
             ) = self._scheduler.schedule_routine_in_case_tl(
-                self._hass, routine, datetime.now()
+                self._hass, routine
             )
             tries = 0
             while not success:  # pylint: disable=too-many-nested-blocks
@@ -2943,40 +2979,42 @@ class RascalScheduler(BaseScheduler):
                     )
 
                 self._remove_scheduled_actions(routine.routine_id)
-                next_start_time = string_to_datetime(lock_leasing_status["next_start_time"])
-                if conflict:
-                    target_entities = get_routine_targets(self._hass, routine)
-                    for conflict_routine_id in conflict:
-                        conflict_routine_info = self._serialization_order[
-                            conflict_routine_id
-                        ]
-                        if not conflict_routine_info:
-                            raise ValueError(
-                                "Routine %s is not found in the serialization order"
-                                % conflict_routine_id
-                            )
-                        for action in list(conflict_routine_info.routine.actions.values())[
-                            :-1
-                        ]:
-                            conflict_action_targets = set(
-                                get_target_entities(self._hass, action.action)
-                            )
-                            conflicting_entities = target_entities.intersection(
-                                conflict_action_targets
-                            )
-                            for entity in conflicting_entities:
-                                entity_id = get_entity_id_from_number(self._hass, entity)
-                                action_lock = self.get_action_info(
-                                    action.action_id, entity_id
-                                )
-                                if not action_lock:
-                                    raise ValueError(
-                                        "Action {}'s schedule information on entity {} is missing.".format(
-                                            action.action_id, entity_id
-                                        )
-                                    )
+                # dict_next_start_time = lock_leasing_status["next_start_time"]
+                next_start_time = lock_leasing_status["next_start_time"]
+                # next_start_time = string_to_datetime(lock_leasing_status["next_start_time"])
+                # if conflict:
+                    # target_entities = get_routine_targets(self._hass, routine)
+                    # for conflict_routine_id in conflict:
+                    #     conflict_routine_info = self._serialization_order[
+                    #         conflict_routine_id
+                    #     ]
+                    #     if not conflict_routine_info:
+                    #         raise ValueError(
+                    #             "Routine %s is not found in the serialization order"
+                    #             % conflict_routine_id
+                    #         )
+                    #     for action in list(conflict_routine_info.routine.actions.values())[
+                    #         :-1
+                    #     ]:
+                    #         conflict_action_targets = set(
+                    #             get_target_entities(self._hass, action.action)
+                    #         )
+                    #         conflicting_entities = target_entities.intersection(
+                    #             conflict_action_targets
+                    #         )
+                    #         for entity in conflicting_entities:
+                    #             entity_id = get_entity_id_from_number(self._hass, entity)
+                    #             action_lock = self.get_action_info(
+                    #                 action.action_id, entity_id
+                    #             )
+                    #             if not action_lock:
+                    #                 raise ValueError(
+                    #                     "Action {}'s schedule information on entity {} is missing.".format(
+                    #                         action.action_id, entity_id
+                    #                     )
+                    #                 )
 
-                                next_start_time = max(next_start_time, action_lock.end_time)
+                    #            next_start_time = max(next_start_time, action_lock.end_time)
                 _LOGGER.info(f"{next_start_time=}")
                 # rescheule the routine
                 (

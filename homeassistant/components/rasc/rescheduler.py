@@ -1,7 +1,7 @@
 """Resource reclamation and rescheduling for RASC."""
 import asyncio
 from collections.abc import Callable
-import copy
+import copy, logging
 from datetime import datetime, timedelta
 import heapq
 from itertools import product
@@ -77,7 +77,7 @@ from .scheduler import (
     output_all,
 )
 
-LOGGER = set_logger("rescheduler")
+LOGGER = logging.getLogger('rasc.scheduler')
 
 
 class BaseRescheduler(TimeLineScheduler):
