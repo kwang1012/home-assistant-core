@@ -111,7 +111,7 @@ class RASCAbstraction:
 
     def _get_action_length_estimate(self, state: RASCState) -> float:
         if not state.start_time:
-            LOGGER.error(
+            LOGGER.warning(
                 "Start_time must be provided for %s: %s", state.entity.entity_id, state
             )
             return 0
@@ -937,7 +937,9 @@ class RASCStore:
         )
 
     class _ConfigStore(Store[dict[str, dict[str, dict[str, list[float]]]]]):
-        def __init__(self, hass: HomeAssistant, config: ConfigType | None = None) -> None:
+        def __init__(
+            self, hass: HomeAssistant, config: ConfigType | None = None
+        ) -> None:
             """Initialize storage class."""
             super().__init__(
                 hass,

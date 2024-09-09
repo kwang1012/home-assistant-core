@@ -38,24 +38,28 @@ def create_routine_aliases(filtered_logs):
     routine_triggers = []
 
     for line in filtered_logs:
-        if "Trigger routine" in line:
-            routine_match = re.search(r"routine (\S+) in (\d+\.\d+) seconds", line)
+        if "Scheduling routine" in line:
+            routine_match = re.search(r"routine (\S+) took (\d+\.\d+) seconds", line)
             if routine_match:
                 routine_id = routine_match.group(1)
                 trigger_seconds = float(routine_match.group(2))
                 routine_triggers.append((trigger_seconds, routine_id))
 
     # Sort routines by trigger seconds
-    routine_triggers.sort()
+    # routine_triggers.sort()
 
     for _, routine_id in routine_triggers:
         if routine_id not in routine_aliases:
             routine_aliases[routine_id] = f"R{routine_counter}"
             routine_counter += 1
 
+    return routine_aliases
+
+
+def replace_routine_aliases(logs: list[str], routine_aliases: dict[str, str]):
     # Replace routine IDs and action IDs in all messages
     replaced_logs = []
-    for line in filtered_logs:
+    for line in logs:
         replaced_log = line
         for routine_id, alias in routine_aliases.items():
             replaced_log = re.sub(routine_id, alias, replaced_log)
@@ -101,7 +105,12 @@ def main():
 
     filtered_logs = filter_logs(log_lines)
     replaced_logs = replace_dynamic_text(filtered_logs)
-    replaced_logs = create_routine_aliases(replaced_logs)
+    routine_aliases = create_routine_aliases(replaced_logs)
+    replaced_logs = replace_routine_aliases(replaced_logs, routine_aliases)
+    routine_aliases_str = "\n".join(
+        f"{alias}: {routine_id}" for routine_id, alias in routine_aliases.items()
+    )
+    replaced_logs.insert(0, routine_aliases_str)
 
     write_logs_to_file(replaced_logs, output_file_path)
 

@@ -199,7 +199,9 @@ class ScheduleMetrics:
                 routine_id not in self._arrival_times
                 and routine_id not in self._wait_times
             ):
-                raise ValueError(f"Routine {routine_id} has not arrived.")
+                raise ValueError(
+                    f"Remove routine remaining actions: Routine {routine_id} has not arrived."
+                )
             return
             # raise ValueError(f"Routine {routine_id} has no remaining actions ({action_id=}, {entity_id=}).")
         if action_id not in self._remaining_actions[routine_id]:
@@ -246,7 +248,9 @@ class ScheduleMetrics:
         if routine_id not in self._end_times or end_time > self._end_times[routine_id]:
             self._end_times[routine_id] = end_time
             if routine_id not in self._remaining_actions:
-                raise ValueError(f"Routine {routine_id} has not arrived.")
+                raise ValueError(
+                    f"Record routine end: Routine {routine_id} has not arrived."
+                )
             if not self._schedule_end or end_time > self._schedule_end:
                 self._schedule_end = end_time
             if self._remaining_actions[routine_id]:
