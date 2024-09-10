@@ -14,7 +14,7 @@ sources = [
 target_dataset = f"{dataset_dir}/arrival_all_bursty.csv"
 target_df = pd.DataFrame()
 
-for i, source in enumerate(sources):
+for source in sources:
     source_path = f"{dataset_dir}/{source}"
     source_df = pd.read_csv(source_path, names=headers)
     source_df.loc[0, "timestamp"] += 30
@@ -29,7 +29,7 @@ target_df = pd.DataFrame()
 
 last_source_start = 0
 cumsum = 0
-for i, source in enumerate(sources):
+for source in sources:
     source_path = f"{dataset_dir}/{source}"
     source_df = pd.read_csv(source_path, names=headers)
     # Randomly select rows to be bursty at the beginning of the period
