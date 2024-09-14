@@ -79,6 +79,7 @@ from .scheduler import (
 )
 
 LOGGER = logging.getLogger("rasc.rescheduler")
+LOGGER.setLevel(logging.DEBUG)
 
 
 class BaseRescheduler(TimeLineScheduler):
@@ -902,6 +903,8 @@ class BaseRescheduler(TimeLineScheduler):
                 not end_time or (time_range_end and end_time >= time_range_end)
             ):
                 return st_time, end_time
+
+        LOGGER.info("Lock queue status: %s", [f"{action_info.action_id}: {datetime_to_string(action_info.start_time)}-{datetime_to_string(action_info.end_time)}" for action_info in self._lineage_table.lock_queues[entity_id].values()])
         raise ValueError(
             f"No free slot found on {entity_id} that includes the given time range. "
             f"free_slots: {free_slots}, time_range: {time_range_to_string(time_range)}"
@@ -2630,20 +2633,22 @@ class RascalRescheduler:
                 datetime_to_string(st_time),
                 datetime_to_string(new_end_time),
             )
-        LOGGER.info(
-            f"Entity {entity_id} action {action_id} old schedule: {datetime_to_string(action_lock.start_time)}-{datetime_to_string(action_lock.end_time)}"
-        )
+        # LOGGER.info(
+        #     f"Entity {entity_id} action {action_id} old schedule: {datetime_to_string(action_lock.start_time)}-{datetime_to_string(action_lock.end_time)}"
+        # )
+        # LOGGER.info("Old end time: %s, New end time: %s", old_end_time, new_end_time)
         action_lock.move_to(st_time, new_end_time)
-        LOGGER.info(
-            f"Entity {entity_id} action {action_id} new schedule: {datetime_to_string(action_lock.start_time)}-{datetime_to_string(new_end_time)}"
-        )
-        LOGGER.info(f"Entity {entity_id} old free slots {old_lt.free_slots[entity_id]}")
+        # LOGGER.info(
+        #     f"Entity {entity_id} action {action_id} new schedule: {datetime_to_string(action_lock.start_time)}-{datetime_to_string(new_end_time)}"
+        # )
+        # LOGGER.info(f"Entity {entity_id} old free slots {old_lt.free_slots[entity_id]}")
         if diff.total_seconds() < 0:
             metrics.record_action_end(new_end_time, entity_id, action_id)
             # return part of the free slots
             free_slots = old_lt.free_slots[entity_id]
             found = False
             for slot_st, slot_end in free_slots.items():
+                # LOGGER.info(f"slot_st={datetime_to_string(slot_st)}, slot_end={datetime_to_string(slot_end)} {slot_st == old_end_time}")
                 # if there is already a slot that starts at the old end time, merge the slots
                 if slot_st == old_end_time:
                     free_slots.insert_before(slot_st, new_end_time, slot_end)
@@ -2675,7 +2680,7 @@ class RascalRescheduler:
                     free_slots.insert_before(slot_st, new_end_time, slot_end)
                     free_slots.pop(slot_st)
                     break
-        LOGGER.info(f"Entity {entity_id} new free slots {old_lt.free_slots[entity_id]}")
+        # LOGGER.info(f"Entity {entity_id} new free slots {old_lt.free_slots[entity_id]}")
 
         # Update the rescheduler's schedule to the current one
         self._rescheduler.lineage_table = old_lt.duplicate
@@ -2685,44 +2690,44 @@ class RascalRescheduler:
         new_lt = None
         new_so = self._rescheduler.serialization_order
 
-        for _entity_id in old_lt.lock_queues:
-            printed_lock_queues = [
-                f"{datetime_to_string(action.start_time)}-{datetime_to_string(action.end_time)}"
-                for action in self._rescheduler.lineage_table.lock_queues[
-                    _entity_id
-                ].values()
-            ]
-            printed_free_slots = [
-                f"{datetime_to_string(st)}-{datetime_to_string(et)}"
-                for st, et in self._rescheduler.lineage_table.free_slots[
-                    _entity_id
-                ].items()
-            ]
-            LOGGER.info(
-                f"entity: {_entity_id}\n{printed_lock_queues=}\n{printed_free_slots=}"
-            )
+        # for _entity_id in old_lt.lock_queues:
+        #     printed_lock_queues = [
+        #         f"{datetime_to_string(action.start_time)}-{datetime_to_string(action.end_time)}"
+        #         for action in self._rescheduler.lineage_table.lock_queues[
+        #             _entity_id
+        #         ].values()
+        #     ]
+        #     printed_free_slots = [
+        #         f"{datetime_to_string(st)}-{datetime_to_string(et)}"
+        #         for st, et in self._rescheduler.lineage_table.free_slots[
+        #             _entity_id
+        #         ].items()
+        #     ]
+            # LOGGER.info(
+            #     f"entity: {_entity_id}\n{printed_lock_queues=}\n{printed_free_slots=}"
+            # )
 
         if self._resched_policy in (RV, EARLY_START) and diff.total_seconds() > 0:
             success = await self._move_device_schedules(old_end_time, diff)
             if not success:
                 raise ValueError("Failed to move device schedules.")
 
-        for _entity_id in old_lt.lock_queues:
-            printed_lock_queues = [
-                f"{datetime_to_string(action.start_time)}-{datetime_to_string(action.end_time)}"
-                for action in self._rescheduler.lineage_table.lock_queues[
-                    _entity_id
-                ].values()
-            ]
-            printed_free_slots = [
-                f"{datetime_to_string(st)}-{datetime_to_string(et)}"
-                for st, et in self._rescheduler.lineage_table.free_slots[
-                    _entity_id
-                ].items()
-            ]
-            LOGGER.info(
-                f"After move: entity: {_entity_id}\n{printed_lock_queues=}\n{printed_free_slots=}"
-            )
+        # for _entity_id in old_lt.lock_queues:
+        #     printed_lock_queues = [
+        #         f"{datetime_to_string(action.start_time)}-{datetime_to_string(action.end_time)}"
+        #         for action in self._rescheduler.lineage_table.lock_queues[
+        #             _entity_id
+        #         ].values()
+        #     ]
+        #     printed_free_slots = [
+        #         f"{datetime_to_string(st)}-{datetime_to_string(et)}"
+        #         for st, et in self._rescheduler.lineage_table.free_slots[
+        #             _entity_id
+        #         ].items()
+        #     ]
+        #     LOGGER.info(
+        #         f"After move: entity: {_entity_id}\n{printed_lock_queues=}\n{printed_free_slots=}"
+        #     )
 
         if self._resched_policy in (RV):
             try:
@@ -2737,7 +2742,7 @@ class RascalRescheduler:
             )
             if not affected_actions:
                 LOGGER.info("No affected source actions found, nothing to reschedule")
-                # self._apply_schedule(old_lt, old_so)
+                self._apply_schedule(old_lt, old_so)
                 return
             LOGGER.info("Affected actions: %s", list(affected_actions.keys()))
 
@@ -2804,7 +2809,7 @@ class RascalRescheduler:
                 )
         LOGGER.info("============= Reschedule ends =============")
         if not new_lt:
-            # self._apply_schedule(old_lt, old_so)
+            self._apply_schedule(old_lt, old_so)
             return
         LOGGER.info("New schedule created at %s", datetime.now())
         output_all(
@@ -3164,7 +3169,7 @@ class RascalRescheduler:
             return
 
         # async with self._scheduler.handle_event_lock:
-        LOGGER.debug("Handling event in rescheduler %s", event)
+        LOGGER.info("Handling event in rescheduler %s", event)
         if response == SCHEDULE_START:
             timer_delay = self._init_timer_delay(event)
             self.setup_overtime_check(event, timer_delay)
