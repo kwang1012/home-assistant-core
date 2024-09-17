@@ -124,10 +124,21 @@ class Dataset(Enum):
     """Dataset enum."""
 
     THERMOSTAT = "thermostat"
+    COFFEE_MACHINE = "coffee_machine"
+    DISHWASHER = "dishwasher"
     DOOR = "door"
+    DRYER = "dryer"
     ELEVATOR = "elevator"
+    MICROWAVE = "microwave"
+    MOWER = "mower"
+    OVEN = "oven"
     PROJECTOR = "projector"
     SHADE = "shade"
+    SPRINKLER = "sprinkler"
+    TOASTER = "toaster"
+    VACUUM = "vacuum"
+    WASHER = "washer"
+    WINDOW = "window"
 
 
 def load_dataset(name: Dataset, action: str | None = None):

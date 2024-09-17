@@ -1,4 +1,5 @@
 import json
+import os
 
 import numpy as np
 
@@ -10,27 +11,36 @@ devices_to_actions = {
         "mocha": (120, 5),
         "americano": (60, 5),
     },
+    "dishwasher": {
+        "wash": (7 * 60, 60),
+        "rinse": (3 * 60, 60),
+        "dry": (5 * 50, 60),
+    },
+    "dryer": {"dry": (10 * 60, 2 * 60)},
     "microwave": {"heat": (90, 1)},
-    "toaster": {"toast": (180, 1)},
+    "mower": {
+        "mow": (10 * 60, 2 * 60),
+        "return_to_base": (60, 15),
+    },
     "oven": {
         "bake": (5 * 60, 1),
         "broil": (2 * 60, 1),
         "roast": (6 * 60, 1),
     },
-    "dishwasher": {
-        "wash": (7 * 60, 10),
-        "rinse": (3 * 60, 10),
-        "dry": (5 * 50, 10),
+    "sprinkler": {"water": (5 * 60, 1)},
+    "toaster": {"toast": (180, 1)},
+    "vacuum": {
+        "clean": (7 * 60, 1 * 60),
+        "return_to_base": (30, 5),
+    },
+    "washer": {
+        "wash": (30 * 60, 5),
+        "rinse": (10 * 60, 3),
+        "spin": (5 * 60, 1),
     },
     "window": {
         "open": (5, 1),
         "close": (5, 1),
-    },
-    "sprinkler": {"water": (5 * 60, 1)},
-    "mower": {"mow": (5 * 60, 3 * 60)},
-    "vacuum": {
-        "clean": (7 * 60, 3 * 60),
-        "dock": (30, 15),
     },
 }
 
@@ -38,6 +48,9 @@ dataset_dir = "homeassistant/components/rasc/datasets"
 
 for device, actions in devices_to_actions.items():
     target_path = f"{dataset_dir}/{device}.json"
+    if os.path.exists(target_path):
+        continue
+
     target_json = {}
 
     for action, (mean, std) in actions.items():

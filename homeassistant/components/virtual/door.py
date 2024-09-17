@@ -103,7 +103,7 @@ async def async_setup_entry(
 class VirtualDoor(VirtualEntity, CoverEntity):
     """Representation of a Virtual cover."""
 
-    def __init__(self, config):
+    def __init__(self, config) -> None:
         """Initialize the Virtual cover device."""
         super().__init__(config, PLATFORM_DOMAIN)
 
@@ -240,7 +240,7 @@ class VirtualDoor(VirtualEntity, CoverEntity):
 class CoordinatedVirtualDoor(CoordinatedVirtualEntity, VirtualDoor):
     """Representation of a Virtual switch."""
 
-    def __init__(self, config, coordinator):
+    def __init__(self, config, coordinator) -> None:
         """Initialize the Virtual switch device."""
         CoordinatedVirtualEntity.__init__(self, coordinator)
         VirtualDoor.__init__(self, config)

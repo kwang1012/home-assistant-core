@@ -1,0 +1,138 @@
+{
+    "device_actions": {
+        "coffee_machine": [
+            "cappuccino",
+            "espresso",
+            "latte",
+            "mocha",
+            "americano"
+        ],
+        "dishwasher": [
+            "wash",
+            "rinse",
+            "dry"
+        ],
+        "door": [
+            "open",
+            "close"
+        ],
+        "dryer": ["dry"],
+        "light": [
+            "turn_on",
+            "turn_off"
+        ],
+        "microwave": ["heat"],
+        "mower": [
+            "mow",
+            "return_to_base"
+        ],
+        "oven": [
+            "bake",
+            "broil",
+            "roast"
+        ],
+        "projector": [
+            "up",
+            "down"
+        ],
+        "shade": [
+            "up",
+            "down"
+        ],
+        "sprinkler": ["water"],
+        "thermostat": [
+            "heat",
+            "cool",
+            "off"
+        ],
+        "toaster": ["toast"],
+        "vacuum": [
+            "clean",
+            "return_to_base"
+        ],
+        "washer": [
+            "wash",
+            "rinse",
+            "spin"
+        ],
+        "window": [
+            "open",
+            "close"
+        ]
+    },
+    "smart_spaces": {
+        "apartment": {
+            "device_types": {
+                "coffee_machine": 1,
+                "dishwasher": 1,
+                "door": 1,
+                "dryer": 1,
+                "thermostat": 1,
+                "light": 7,
+                "microwave": 1,
+                "oven": 1,
+                "shade": 3,
+                "toaster": 1,
+                "vacuum": 1,
+                "washer": 1,
+                "window": 3
+            },
+            "scale_constraints": {
+                "max_actions": 5,
+                "max_routines": 15
+            }
+        },
+        "house1fl": {
+            "device_types": {
+                "coffee_machine": 1,
+                "dishwasher": 1,
+                "door": 2,
+                "dryer": 1,
+                "thermostat": 1,
+                "light": 15,
+                "microwave": 1,
+                "mower": 1,
+                "oven": 1,
+                "shade": 5,
+                "sprinkler": 4,
+                "toaster": 1,
+                "vacuum": 1,
+                "washer": 1,
+                "window": 5
+            },
+            "scale_constraints": {
+                "max_actions": 10,
+                "max_routines": 50
+            }
+        },
+        "house2fl": {
+            "device_types": {
+                "coffee_machine": 1,
+                "dishwasher": 1,
+                "door": 2,
+                "dryer": 1,
+                "thermostat": 2,
+                "light": 30,
+                "microwave": 1,
+                "mower": 1,
+                "oven": 1,
+                "shade": 10,
+                "sprinkler": 10,
+                "toaster": 1,
+                "vacuum": 2,
+                "washer": 1,
+                "window": 10
+            },
+            "scale_constraints": {
+                "max_actions": 10,
+                "max_routines": 75
+            }
+        }
+    },
+    "constraints": {
+        "use_complex_dependencies": true,
+        "probability_multiple_children": 0.3,
+        "high_action_routine_percentage": 0.4,
+        "non_completion_dependencies_ratio": 0.5
+    }
+}
