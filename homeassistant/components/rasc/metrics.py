@@ -207,8 +207,8 @@ class ScheduleMetrics:
         if action_id not in self._remaining_actions[routine_id]:
             return
         self._remaining_actions[routine_id][action_id].remove(entity_id)
-        if not self._remaining_actions[routine_id][action_id]:
-            del self._remaining_actions[routine_id][action_id]
+        # if not self._remaining_actions[routine_id][action_id]:
+        #     del self._remaining_actions[routine_id][action_id]
         # LOGGER.debug("Action %s completed on entity %s", action_id, entity_id)
         # LOGGER.debug("New remaining actions for routine %s: %s", routine_id, self._remaining_actions[routine_id])
 

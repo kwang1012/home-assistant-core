@@ -85,7 +85,7 @@ CONF_END_VIRTUAL_NODE = "end_virtual_node"
 TIMEOUT = 3000  # millisecond
 
 _LOGGER = set_logger()
-_LOGGER.setLevel(logging.INFO)
+_LOGGER.setLevel(logging.DEBUG)
 
 
 def create_routine(
@@ -673,7 +673,7 @@ def output_all(
     conflict=False,
 ):
     """Output specific info."""
-
+    return
     if conflict:
         dirname = f"conflict-{TRAIL.num:04d}"
     else:
@@ -788,7 +788,7 @@ class ActionInfo:
         """Move to new time range."""
         if entity_id:
             _LOGGER.info(
-                "Move action %s to %s-%s on %s",
+                "[Action Info] Move action %s to %s-%s on %s",
                 self.action_id,
                 new_start_time,
                 new_end_time,
@@ -796,7 +796,7 @@ class ActionInfo:
             )
         else:
             _LOGGER.info(
-                "Move action %s to %s-%s", self.action_id, new_start_time, new_end_time
+                "[Action Info] Move action %s to %s-%s", self.action_id, new_start_time, new_end_time
             )
         self._start_time = new_start_time
         self._end_time = new_end_time
@@ -934,7 +934,7 @@ class LineageTable:
 
         lt.free_slots = copy.deepcopy(self._free_slots)
 
-        _LOGGER.log(logging.DEBUG, "Just duplicated lineage table!")
+        #_LOGGER.log(logging.DEBUG, "Just duplicated lineage table!")
         return lt
 
     def add_entity(self, entity_id: str) -> None:
@@ -1431,7 +1431,7 @@ class BaseScheduler:
             free_slots.insert_after(slot_st, action_end, slot_end)
             free_slots.updateitem(slot_st, action_st)
 
-        _LOGGER.info("%s: free slots: %s", entity_id or "", free_slots)
+        #_LOGGER.info("%s free slots: %s", entity_id or "", free_slots)
 
         return action_end
 
@@ -1603,10 +1603,10 @@ class BaseScheduler:
 
         _LOGGER.info("Start scheduling the routine %s", routine.routine_id)
 
-        # Remove time slots before now
-        self.remove_time_slots_before_now(
-            datetime.now(), self._lineage_table.free_slots
-        )
+        #Remove time slots before now
+        # self.remove_time_slots_before_now(
+        #     datetime.now(), self._lineage_table.free_slots
+        # )
 
         # Deep copy the free slots
         tmp_fs = copy.deepcopy(self._lineage_table.free_slots)
@@ -2220,9 +2220,9 @@ class TimeLineScheduler(BaseScheduler):
 
         # Remove time slots before now
         next_end_time = next_start_time  # + generate_duration(MAX_SCHEDULE_TIME)
-        self.remove_time_slots_before_now(
-            datetime.now(), self._lineage_table.free_slots
-        )
+        # self.remove_time_slots_before_now(
+        #     datetime.now(), self._lineage_table.free_slots
+        # )
 
         # Deep copy the free slots
         tmp_fs = copy.deepcopy(self._lineage_table.free_slots)
@@ -3309,22 +3309,23 @@ class RascalScheduler(BaseScheduler):
                     datetime_to_string(datetime.now()),
                 )
 
+            start_st = datetime.now()
             for entity in target_entities:
                 entity_id = get_entity_id_from_number(self._hass, entity)
                 action_info = self.get_action_info(action.action_id, entity_id)
-                self._return_free_slot(entity_id, action.action_id)
-                action_info.start_time = datetime.now()
-                free_slot = self._find_slot_including_time_range(
-                    self._lineage_table.free_slots[entity_id],
-                    (action_info.start_time, action_info.end_time),
-                    entity_id,
-                )
-                self.schedule_action(
-                    free_slot,
-                    (action_info.start_time, action_info.end_time),
-                    self._lineage_table.free_slots[entity_id],
-                    entity_id,
-                )
+                # self._return_free_slot(entity_id, action.action_id)
+                action_info.start_time = start_st
+                # free_slot = self._find_slot_including_time_range(
+                #     self._lineage_table.free_slots[entity_id],
+                #     (action_info.start_time, action_info.end_time),
+                #     entity_id,
+                # )
+                # self.schedule_action(
+                #     free_slot,
+                #     (action_info.start_time, action_info.end_time),
+                #     self._lineage_table.free_slots[entity_id],
+                #     entity_id,
+                # )
                 await self._reschedule_handler(
                     Event(
                         "",
@@ -3485,11 +3486,11 @@ class RascalScheduler(BaseScheduler):
         if key not in entity_free_slots and old_action_end not in entity_free_slots:
             for slot_start, slot_end in entity_free_slots.items():
                 if slot_start > old_action_start:
-                    _LOGGER.debug(
-                        "slot_start: %s, old_action_start: %s",
-                        slot_start,
-                        old_action_start,
-                    )
+                    # _LOGGER.debug(
+                    #     "slot_start: %s, old_action_start: %s",
+                    #     slot_start,
+                    #     old_action_start,
+                    # )
                     entity_free_slots.insert_before(
                         slot_start, old_action_start, old_action_end
                     )
