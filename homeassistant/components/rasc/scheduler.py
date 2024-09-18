@@ -1935,7 +1935,7 @@ class TimeLineScheduler(BaseScheduler):
                 idx2 = self._serialization_order.index(routine_in_poset)
 
                 if idx1 > idx2:
-                    _LOGGER.error("Conflict determined serializability in timeline")
+                    _LOGGER.warning("Conflict determined serializability in timeline")
                     return True
 
         return False
@@ -1949,23 +1949,23 @@ class TimeLineScheduler(BaseScheduler):
         preset: set[str],
         postset: set[str],
         new_action: ActionEntity,
-    ) -> tuple[datetime | None, Optional[set[str]], dict[str, datetime]]:
+    ) -> tuple[datetime | None, Optional[set[str]]]:
         """Get available time slot by timeline."""
-        _LOGGER.info(
-            "Free slots for entity %s: %s",
-            entity_id,
-            free_slots[entity_id],
-        )
-        _LOGGER.info(
-            "Lock queue for entity %s: %s",
-            entity_id,
-            [
-                f"{action_id}: {datetime_to_string(action_lock.start_time)}-{datetime_to_string(action_lock.end_time)}"
-                for action_id, action_lock in self._lineage_table.lock_queues[
-                    entity_id
-                ].items()
-            ],
-        )
+        # _LOGGER.info(
+        #     "Free slots for entity %s: %s",
+        #     entity_id,
+        #     free_slots[entity_id],
+        # )
+        # _LOGGER.info(
+        #     "Lock queue for entity %s: %s",
+        #     entity_id,
+        #     [
+        #         f"{action_id}: {datetime_to_string(action_lock.start_time)}-{datetime_to_string(action_lock.end_time)}"
+        #         for action_id, action_lock in self._lineage_table.lock_queues[
+        #             entity_id
+        #         ].items()
+        #     ],
+        # )
 
         conflict = None
         cur_preset, cur_postset = set[str](), set[str]()
@@ -2095,11 +2095,11 @@ class TimeLineScheduler(BaseScheduler):
 
         output_all(_LOGGER, preset=preset, postset=postset)
 
-        _LOGGER.debug(
-            "The start time of the new time slot for the new action in entity %s is %s",
-            entity_id,
-            datetime_to_string(start_time) if start_time else None,
-        )
+        # _LOGGER.debug(
+        #     "The start time of the new time slot for the new action in entity %s is %s",
+        #     entity_id,
+        #     datetime_to_string(start_time) if start_time else None,
+        # )
 
         return start_time, conflict
 
@@ -2111,7 +2111,7 @@ class TimeLineScheduler(BaseScheduler):
         lock_leasing_status: dict[str, str],
         preset: set[str],
         postset: set[str],
-    ) -> tuple[bool, datetime, Optional[set[str]]]:
+    ) -> tuple[bool, datetime, Optional[set[str]], datetime]:
         """Insert action to the free slots at now based on lock leasing approach."""
 
         target_entities = get_target_entities(self._hass, action.action)
@@ -2126,11 +2126,19 @@ class TimeLineScheduler(BaseScheduler):
         group_action_start_time: dict[str, datetime] = {}
         group_slot_start_time: dict[str, datetime] = {}
 
+        max_parent_end_time = None
+        for parent in action.all_parents:
+            parent_target_entities = get_target_entities(self._hass, parent.action)
+            for entity in parent_target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+                max_parent_end_time = max(now[entity_id], max_parent_end_time) if max_parent_end_time else now[entity_id]
+
+        _LOGGER.debug('max parent end time :%s', max_parent_end_time)
         for entity in target_entities:
             entity_id = get_entity_id_from_number(self._hass, entity)
 
             start_time, conflict = self.get_available_ts_in_case_tl(
-                now[entity_id],
+                max(now[entity_id], max_parent_end_time) if max_parent_end_time else now[entity_id],
                 free_slots,
                 entity_id,
                 lock_leasing_status,
@@ -2184,7 +2192,7 @@ class TimeLineScheduler(BaseScheduler):
         actual_start_time = max(group_action_start_time.values())
 
         for entity_id, start_time in group_slot_start_time.items():
-            action_st = max(actual_start_time, now[entity_id])
+            action_st = max(actual_start_time, now[entity_id], max_parent_end_time) if max_parent_end_time else max(actual_start_time, now[entity_id])
             action_length = max(action.length(entity_id), timedelta(seconds=2))
             action_end = action_st + action_length
 
@@ -2253,6 +2261,7 @@ class TimeLineScheduler(BaseScheduler):
                 success, next_end_time, conflict = self.schedule_all_action_in_case_tl(
                     action, next_end_time, tmp_fs, lock_leasing_status, preset, postset
                 )
+
             else:
                 success, next_end_time, conflict = self._schedule_routine_in_case_tl(
                     hass,
@@ -3539,9 +3548,6 @@ class RascalScheduler(BaseScheduler):
     async def handle_event(self, event: Event) -> None:  # noqa: C901
         """Handle event."""
         async with self.handle_event_lock:
-            if self._reschedule_handler is not None:
-                await self._reschedule_handler(event)
-
             event_type: Optional[str] = event.data.get(CONF_TYPE)
             entity_id: Optional[str] = event.data.get(CONF_ENTITY_ID)
             action_id: Optional[str] = event.data.get(ATTR_ACTION_ID)
@@ -3554,6 +3560,14 @@ class RascalScheduler(BaseScheduler):
                 or not event_type
             ):
                 return
+
+            if event_type == RASC_COMPLETE:
+                self._metrics.record_action_end(
+                    event.time_fired, entity_id, action_id
+                )
+
+            if self._reschedule_handler is not None:
+                await self._reschedule_handler(event)
 
             _LOGGER.debug("Handling event %s", event)
 
@@ -3626,10 +3640,6 @@ class RascalScheduler(BaseScheduler):
                             "Action %s on entity %s is started", action_id, entity_id
                         )
 
-                    self._metrics.record_action_end(
-                        event.time_fired, entity_id, action_id
-                    )
-
                     # update the action state
                     self._update_action_state(action_id, entity_id, event_type)
 
@@ -3669,6 +3679,7 @@ class RascalScheduler(BaseScheduler):
 
     async def _start_ready_actions(self) -> None:
         """Start the ready actions."""
+        _LOGGER.debug("Start ready actions")
         for lock_queue in self._lineage_table.lock_queues.values():
             _, action_lock = lock_queue.top()
             if action_lock is None:
