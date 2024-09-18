@@ -186,7 +186,7 @@ class ScheduleMetrics:
             ValueError: If the routine has already arrived.
 
         """
-        LOGGER.debug("Record routine arrival %s", routine_id)
+        #LOGGER.debug("Record routine arrival %s", routine_id)
         if routine_id in self._arrival_times:
             raise ValueError(f"Routine {routine_id} has already arrived.")
         arrival_time = arrival_time.replace(tzinfo=None)
@@ -194,12 +194,12 @@ class ScheduleMetrics:
         if not self._first_arrival_time:
             self._first_arrival_time = arrival_time
 
-        LOGGER.debug("Routine %s's sink_actions: %s", routine_id, sink_actions)
+        #LOGGER.debug("Routine %s's sink_actions: %s", routine_id, sink_actions)
         self._remaining_actions[routine_id] = sink_actions
 
     def _remove_routine_remaining_action(self, action_id: str, entity_id: str) -> None:
         routine_id = get_routine_id(action_id)
-        LOGGER.debug("Remove routine remaining action %s", routine_id)
+        #LOGGER.debug("Remove routine remaining action %s", routine_id)
         if routine_id not in self._remaining_actions:
             if (
                 routine_id not in self._arrival_times
@@ -216,7 +216,7 @@ class ScheduleMetrics:
         if not self._remaining_actions[routine_id][action_id]:
             del self._remaining_actions[routine_id][action_id]
 
-        LOGGER.debug("[remaning] Action %s completed on entity %s", action_id, entity_id)
+        #LOGGER.debug("[remaning] Action %s completed on entity %s", action_id, entity_id)
         # LOGGER.debug("New remaining actions for routine %s: %s", routine_id, self._remaining_actions[routine_id])
 
     def _record_routine_start(self, action_id: str, start_time: datetime) -> None:
@@ -230,7 +230,7 @@ class ScheduleMetrics:
             ValueError: If the routine has not arrived.
 
         """
-        LOGGER.debug("Record routine start %s", action_id)
+        #LOGGER.debug("Record routine start %s", action_id)
         routine_id = get_routine_id(action_id)
         if (
             routine_id not in self._start_times
@@ -252,7 +252,7 @@ class ScheduleMetrics:
             ValueError: If the routine has not arrived.
 
         """
-        LOGGER.debug("Record routine end %s", action_id)
+        #LOGGER.debug("Record routine end %s", action_id)
         routine_id = get_routine_id(action_id)
         if routine_id not in self._end_times or end_time > self._end_times[routine_id]:
             self._end_times[routine_id] = end_time
@@ -284,7 +284,7 @@ class ScheduleMetrics:
             action_id: The ID of the action.
 
         """
-        LOGGER.debug("Record action start %s", action_id)
+        #LOGGER.debug("Record action start %s", action_id)
         time = time.replace(tzinfo=None)
 
         # dict should be ordered by insertion time in Python 3.7+
@@ -320,7 +320,7 @@ class ScheduleMetrics:
             action_id: The ID of the action.
 
         """
-        LOGGER.debug("Record action end %s", action_id)
+        #LOGGER.debug("Record action end %s", action_id)
         time = time.replace(tzinfo=None)
 
         # dict should be ordered by insertion time in Python 3.7+
@@ -343,7 +343,7 @@ class ScheduleMetrics:
         self, time: datetime, entity_id: str, action_id: str
     ) -> None:
         """Record the start of a scheduled action. Called by the optimal rescheduler."""
-        LOGGER.debug("Record scheduled action start %s", action_id)
+        #LOGGER.debug("Record scheduled action start %s", action_id)
         if entity_id not in self._action_times:
             self._action_times[entity_id] = dict[str, ActionTimeRange]()
 
@@ -357,7 +357,7 @@ class ScheduleMetrics:
         self, time: datetime, entity_id: str, action_id: str
     ) -> None:
         """Record the end of a scheduled action. Called by the optimal rescheduler."""
-        LOGGER.debug("Record action end %s", action_id)
+        #LOGGER.debug("Record action end %s", action_id)
         if entity_id not in self._action_times:
             raise ValueError(f"Entity {entity_id} has no scheduled actions.")
         if action_id not in self._action_times[entity_id]:
@@ -410,7 +410,7 @@ class ScheduleMetrics:
 
         """
         if not self._wait_times:
-            LOGGER.warning("No wait times recorded. metrics:\n%s", self)
+            #.warning("No wait times recorded. metrics:\n%s", self)
             return timedelta(0)
         return sum(self._wait_times.values(), timedelta(0)) / len(self._wait_times)
 

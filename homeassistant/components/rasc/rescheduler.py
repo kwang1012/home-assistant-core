@@ -141,14 +141,14 @@ class BaseRescheduler(TimeLineScheduler):
                 start_after = new_action_start
             new_action_end = new_action_start + action_length
 
-            LOGGER.debug(
-                "before in move device schedule, time slot: %s,action_id: %s, action_time, %s-%s,entity_id: %s",
-                self._lineage_table.free_slots[entity_id],
-                action_id,
-                action_lock.start_time,
-                action_lock.end_time,
-                entity_id,
-            )
+            # LOGGER.debug(
+            #     "before in move device schedule, time slot: %s,action_id: %s, action_time, %s-%s,entity_id: %s",
+            #     self._lineage_table.free_slots[entity_id],
+            #     action_id,
+            #     action_lock.start_time,
+            #     action_lock.end_time,
+            #     entity_id,
+            # )
             action_lock = self.get_action_info(action_id, entity_id)
             if not action_lock:
                 raise ValueError(
@@ -188,14 +188,14 @@ class BaseRescheduler(TimeLineScheduler):
                 entity_free_slots.pop(old_action_end)
             else:
                 entity_free_slots.updateitem(key, old_action_end)
-            LOGGER.debug(
-                "after in move device schedule, time slot: %s,action_id: %s, action_time, %s-%s,entity_id: %s",
-                self._lineage_table.free_slots[entity_id],
-                action_id,
-                action_lock.start_time,
-                action_lock.end_time,
-                entity_id,
-            )
+            # LOGGER.debug(
+            #     "after in move device schedule, time slot: %s,action_id: %s, action_time, %s-%s,entity_id: %s",
+            #     self._lineage_table.free_slots[entity_id],
+            #     action_id,
+            #     action_lock.start_time,
+            #     action_lock.end_time,
+            #     entity_id,
+            # )
             action_lock.move_to(new_action_start, new_action_end)
 
         # # move the free slots of the device by diff seconds after the start time
@@ -277,7 +277,7 @@ class BaseRescheduler(TimeLineScheduler):
             free_slots.insert_after(slot_st, action_end, slot_end)
             free_slots.updateitem(slot_st, action_st)
 
-        LOGGER.info("%s free slots: %s", entity_id or "", free_slots)
+        #LOGGER.info("%s free slots: %s", entity_id or "", free_slots)
 
         return free_slots
 
@@ -383,7 +383,7 @@ class BaseRescheduler(TimeLineScheduler):
         # LOGGER.info("Trying to move %s", [action_info.action_id for action_info in next_action_heap])
         visited = set[str]()
         while next_action_heap:
-            LOGGER.debug(rv_metrics)
+            #LOGGER.debug(rv_metrics)
             action_lock = heapq.heappop(next_action_heap)
             action = action_lock.action
             action_id = action.action_id
@@ -2711,7 +2711,7 @@ class RascalRescheduler:
         st_time, old_end_time = action_lock.time_range
         new_end_time = old_end_time + diff
         metrics = ScheduleMetrics(sm=self._scheduler.metrics)
-        LOGGER.debug('metrics: %s', metrics)
+        #LOGGER.debug('metrics: %s', metrics)
         if st_time > new_end_time:
             LOGGER.error(
                 "%s's new end time is before the start time. %s %s",

@@ -1997,13 +1997,13 @@ class TimeLineScheduler(BaseScheduler):
             )
 
             if cur_preset.intersection(cur_postset):
-                _LOGGER.warning(
-                    "Attempt to schedule at the time slot %s with the action (%s) start time %s. Intersection conflict: %s",
-                    slot_start,
-                    new_action.action_id,
-                    action_st,
-                    cur_preset.intersection(cur_postset),
-                )
+                # _LOGGER.warning(
+                #     "Attempt to schedule at the time slot %s with the action (%s) start time %s. Intersection conflict: %s",
+                #     slot_start,
+                #     new_action.action_id,
+                #     action_st,
+                #     cur_preset.intersection(cur_postset),
+                # )
                 conflict = cur_preset.intersection(cur_postset)
                 continue
 
@@ -2148,10 +2148,10 @@ class TimeLineScheduler(BaseScheduler):
             )
 
             if not start_time:
-                _LOGGER.warning(
-                    "Failed to find a time slot start at %s. Need to reschedule",
-                    now[entity_id],
-                )
+                # _LOGGER.warning(
+                #     "Failed to find a time slot start at %s. Need to reschedule",
+                #     now[entity_id],
+                # )
                 return False, max_end_time, conflict
 
             group_action_start_time[entity_id] = max(start_time, now[entity_id])
@@ -2180,10 +2180,10 @@ class TimeLineScheduler(BaseScheduler):
                 )
 
                 if not start_time:
-                    _LOGGER.warning(
-                        "Failed to find a time slot start at %s. Need to reschedule",
-                        now[entity_id],
-                    )
+                    # _LOGGER.warning(
+                    #     "Failed to find a time slot start at %s. Need to reschedule",
+                    #     now[entity_id],
+                    # )
                     return False, max_end_time, conflict
 
                 group_action_start_time[entity_id] = max(start_time, actual_start_time)
@@ -3679,7 +3679,6 @@ class RascalScheduler(BaseScheduler):
 
     async def _start_ready_actions(self) -> None:
         """Start the ready actions."""
-        _LOGGER.debug("Start ready actions")
         for lock_queue in self._lineage_table.lock_queues.values():
             _, action_lock = lock_queue.top()
             if action_lock is None:
