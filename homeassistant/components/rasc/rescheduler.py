@@ -726,8 +726,6 @@ class BaseRescheduler(TimeLineScheduler):
         descheduled_actions = dict[str, ActionEntity]()
         extra_affected_action_ids = affected_action_ids.copy()
 
-        LOGGER.info(f"{affected_action_ids=}")
-
         while extra_affected_action_ids:
             affected_action_ids.clear()
             affected_action_ids.update(extra_affected_action_ids)
@@ -1024,7 +1022,7 @@ class BaseRescheduler(TimeLineScheduler):
         """Insert action to the free slots and lock queues."""
         target_entities = get_target_entities(self._hass, action.action)
         LOGGER.info(
-            "[Reschedule all action]Move action %s to %s on %s",
+            "Move action %s to %s on %s",
             action.action_id,
             datetime_to_string(action_st),
             target_entities,
@@ -1328,7 +1326,7 @@ class BaseRescheduler(TimeLineScheduler):
     ]:
         """Brute-force go through all options for the optimal schedule."""
         LOGGER.debug("chosen action: %s", chosen_action)
-
+        LOGGER.debug("prev lineage table: %s", prev_lineage_table.lock_queues['light.first_floor_lights'])
         # deep copy lineage table, serialization order, next slots, and wait queues
         lineage_table = prev_lineage_table.duplicate
         serialization_order = Queue(prev_serialization_order)
@@ -1451,6 +1449,7 @@ class BaseRescheduler(TimeLineScheduler):
         best_lt = None
         best_so = None
         for next_action in wait_queues[next_entity_id]:
+            LOGGER.debug("optimal helper linegate table: %s", lineage_table.lock_queues['light.first_floor_lights'])
             lt, so, new_metrics = self._optimal_helper(
                 lineage_table,
                 serialization_order,
@@ -1462,6 +1461,7 @@ class BaseRescheduler(TimeLineScheduler):
                 next_action,
                 serializability_guarantee,
             )
+            LOGGER.debug("optimal helper lt: %s", lt.lock_queues['light.first_floor_lights'])
             if not new_metrics:
                 continue
             if not best_metric or self._cmp_metrics(new_metrics, best_metric):
@@ -1544,6 +1544,8 @@ class BaseRescheduler(TimeLineScheduler):
         best_lt = None
         best_so = None
         # find the action with the shortest duration
+        LOGGER.debug("wait queues: %s", wait_queues)
+        LOGGER.debug("optmal lineage table: %s", self._lineage_table.lock_queues['light.first_floor_lights'])
         for chosen_action in wait_queues[next_entity_id]:
             lt, so, new_metrics = self._optimal_helper(
                 self._lineage_table,
@@ -2719,52 +2721,52 @@ class RascalRescheduler:
                 datetime_to_string(st_time),
                 datetime_to_string(new_end_time),
             )
-        # LOGGER.info(
-        #     f"Entity {entity_id} action {action_id} old schedule: {datetime_to_string(action_lock.start_time)}-{datetime_to_string(action_lock.end_time)}"
-        # )
-        # action_lock.move_to(st_time, new_end_time)
-        # LOGGER.info(
-        #     f"Entity {entity_id} action {action_id} new schedule: {datetime_to_string(action_lock.start_time)}-{datetime_to_string(new_end_time)}"
-        # )
-        # LOGGER.info(f"Entity {entity_id} old free slots {old_lt.free_slots[entity_id]}")
-        # if diff.total_seconds() < 0:
-        #     metrics.record_action_end(new_end_time, entity_id, action_id)
-        #     # return part of the free slots
-        #     free_slots = old_lt.free_slots[entity_id]
-        #     found = False
-        #     for slot_st, slot_end in free_slots.items():
-        #         # if there is already a slot that starts at the old end time, merge the slots
-        #         if slot_st == old_end_time:
-        #             free_slots.insert_before(slot_st, new_end_time, slot_end)
-        #             free_slots.pop(slot_st)
-        #             found = True
-        #             break
-        #     if not found:
-        #         free_slots[new_end_time] = old_end_time
-        # else:
-        #     free_slots = old_lt.free_slots[entity_id]
-        #     found_slot_st = None
-        #     for slot_st, slot_end in free_slots.items():
-        #         # if there is already a slot that starts at the old end time, make it smaller
-        #         if slot_st == old_end_time:
-        #             if slot_end is None or slot_end >= new_end_time:
-        #                 # only first free slot after action entry is affected
-        #                 free_slots.insert_before(slot_st, new_end_time, slot_end)
-        #                 free_slots.pop(slot_st)
-        #                 break
-        #             # more than one slot after action entry are affected
-        #             # found the starting slot that is affected
-        #             found_slot_st = slot_st
-        #             free_slots.pop(slot_st)
-        #         elif found_slot_st and (slot_end is None or slot_end >= new_end_time):
-        #             # found in between slots that are affected
-        #             free_slots.pop(slot_st)
-        #         elif found_slot_st:
-        #             # found the ending slot that is affected
-        #             free_slots.insert_before(slot_st, new_end_time, slot_end)
-        #             free_slots.pop(slot_st)
-        #             break
-        # LOGGER.info(f"Entity {entity_id} new free slots {old_lt.free_slots[entity_id]}")
+        LOGGER.info(
+            f"Entity {entity_id} action {action_id} old schedule: {datetime_to_string(action_lock.start_time)}-{datetime_to_string(action_lock.end_time)}"
+        )
+        action_lock.move_to(st_time, new_end_time)
+        LOGGER.info(
+            f"Entity {entity_id} action {action_id} new schedule: {datetime_to_string(action_lock.start_time)}-{datetime_to_string(new_end_time)}"
+        )
+        LOGGER.info(f"Entity {entity_id} old free slots {old_lt.free_slots[entity_id]}")
+        if diff.total_seconds() < 0:
+            metrics.record_action_end(new_end_time, entity_id, action_id)
+            # return part of the free slots
+            free_slots = old_lt.free_slots[entity_id]
+            found = False
+            for slot_st, slot_end in free_slots.items():
+                # if there is already a slot that starts at the old end time, merge the slots
+                if slot_st == old_end_time:
+                    free_slots.insert_before(slot_st, new_end_time, slot_end)
+                    free_slots.pop(slot_st)
+                    found = True
+                    break
+            if not found:
+                free_slots[new_end_time] = old_end_time
+        else:
+            free_slots = old_lt.free_slots[entity_id]
+            found_slot_st = None
+            for slot_st, slot_end in free_slots.items():
+                # if there is already a slot that starts at the old end time, make it smaller
+                if slot_st == old_end_time:
+                    if slot_end is None or slot_end >= new_end_time:
+                        # only first free slot after action entry is affected
+                        free_slots.insert_before(slot_st, new_end_time, slot_end)
+                        free_slots.pop(slot_st)
+                        break
+                    # more than one slot after action entry are affected
+                    # found the starting slot that is affected
+                    found_slot_st = slot_st
+                    free_slots.pop(slot_st)
+                elif found_slot_st and (slot_end is None or slot_end >= new_end_time):
+                    # found in between slots that are affected
+                    free_slots.pop(slot_st)
+                elif found_slot_st:
+                    # found the ending slot that is affected
+                    free_slots.insert_before(slot_st, new_end_time, slot_end)
+                    free_slots.pop(slot_st)
+                    break
+        LOGGER.info(f"Entity {entity_id} new free slots {old_lt.free_slots[entity_id]}")
 
         # Update the rescheduler's schedule to the current one
         self._rescheduler.lineage_table = old_lt.duplicate
@@ -2907,6 +2909,7 @@ class RascalRescheduler:
         #     free_slots=new_lt.free_slots,
         #     serialization_order=new_so,
         # )
+        LOGGER.debug("new lt lock queue: %s", new_lt.lock_queues['light.first_floor_lights'])
         self._apply_schedule(new_lt, new_so)
 
         end_time = t.time()
@@ -2921,6 +2924,9 @@ class RascalRescheduler:
         serialization_order: Optional[Queue[str, RoutineInfo]] = None,
     ) -> None:
         """Apply the new schedule."""
+
+        LOGGER.debug("new schedule lock queue: %s", schedule.lock_queues['light.first_floor_lights'])
+        LOGGER.debug("old lock queue: %s", self._scheduler.lineage_table.lock_queues['light.first_floor_lights'])
 
         LOGGER.info("Start applying the new schedule")
         for entity_id in schedule.lock_queues:
