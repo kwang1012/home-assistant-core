@@ -391,7 +391,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     await component.async_load()
 
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, setup_routine(hass, config))
+    if config[DOMAIN].get(OVERHEAD_MEASUREMENT):
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, setup_routine(hass, config))
 
     if RASC_EXPERIMENT_SETTING in config[DOMAIN]:
         hass.bus.async_listen_once(

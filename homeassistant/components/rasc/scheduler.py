@@ -1431,7 +1431,7 @@ class BaseScheduler:
             free_slots.insert_after(slot_st, action_end, slot_end)
             free_slots.updateitem(slot_st, action_st)
 
-        _LOGGER.info("%s: free slots: %s", entity_id or "", free_slots)
+        # _LOGGER.info("%s: free slots: %s", entity_id or "", free_slots)
 
         return action_end
 

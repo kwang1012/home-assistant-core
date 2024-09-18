@@ -52,47 +52,34 @@ TOASTER_SCHEMA = vol.Schema(
     )
 )
 
+async def async_setup_entity(hass, entity_config, coordinator):
+    entity_config = TOASTER_SCHEMA(entity_config)
+    if entity_config[CONF_COORDINATED]:
+        entity = cast(
+            VirtualToaster, CoordinatedVirtualToaster(entity_config, coordinator)
+        )
+    else:
+        entity = VirtualToaster(entity_config)
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up toasters."""
+    if entity_config[CONF_SIMULATE_NETWORK]:
+        entity = cast(VirtualToaster, NetworkProxy(entity))
+        hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
 
-    coordinator: VirtualDataUpdateCoordinator = hass.data[COMPONENT_DOMAIN][
-        entry.entry_id
-    ]
-    entities: list[VirtualToaster] = []
-    for entity_config in get_entity_configs(
-        hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN
-    ):
-        entity_config = TOASTER_SCHEMA(entity_config)
-        if entity_config[CONF_COORDINATED]:
-            entity = cast(
-                VirtualToaster, CoordinatedVirtualToaster(entity_config, coordinator)
-            )
-        else:
-            entity = VirtualToaster(entity_config)
+    return entity
 
-        if entity_config[CONF_SIMULATE_NETWORK]:
-            entity = cast(VirtualToaster, NetworkProxy(entity))
-            hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
-
-        entities.append(entity)
-
-    async_add_entities(entities)
-
-
-class VirtualToaster(VirtualEntity, VirtualTimer):
+class VirtualToaster(VirtualTimer):
     """Representation of a Virtual toaster."""
 
     def __init__(self, config) -> None:
         """Initialize the Virtual toaster device."""
-        super().__init__(config, PLATFORM_DOMAIN)
+        super().__init__(config)
 
         self._attr_device_class = VirtualTimerDeviceClass.TOASTER
         self._dataset = load_dataset(Dataset.TOASTER)
+
+    def async_start(self, **kwargs: Any) -> None:
+        """Start the coffee machine."""
+        self.toast(**kwargs)
 
     def toast(self, **kwargs: Any):
         """Toast."""

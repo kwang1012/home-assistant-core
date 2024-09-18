@@ -52,47 +52,39 @@ OVEN_SCHEMA = vol.Schema(
     )
 )
 
+async def async_setup_entity(hass, entity_config, coordinator):
+    entity_config = OVEN_SCHEMA(entity_config)
+    if entity_config[CONF_COORDINATED]:
+        entity = cast(
+            VirtualOven, CoordinatedVirtualOven(entity_config, coordinator)
+        )
+    else:
+        entity = VirtualOven(entity_config)
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up ovens."""
+    if entity_config[CONF_SIMULATE_NETWORK]:
+        entity = cast(VirtualOven, NetworkProxy(entity))
+        hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
 
-    coordinator: VirtualDataUpdateCoordinator = hass.data[COMPONENT_DOMAIN][
-        entry.entry_id
-    ]
-    entities: list[VirtualOven] = []
-    for entity_config in get_entity_configs(
-        hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN
-    ):
-        entity_config = OVEN_SCHEMA(entity_config)
-        if entity_config[CONF_COORDINATED]:
-            entity = cast(
-                VirtualOven, CoordinatedVirtualOven(entity_config, coordinator)
-            )
-        else:
-            entity = VirtualOven(entity_config)
-
-        if entity_config[CONF_SIMULATE_NETWORK]:
-            entity = cast(VirtualOven, NetworkProxy(entity))
-            hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
-
-        entities.append(entity)
-
-    async_add_entities(entities)
+    return entity
 
 
-class VirtualOven(VirtualEntity, VirtualTimer):
+class VirtualOven(VirtualTimer):
     """Representation of a Virtual oven."""
 
     def __init__(self, config) -> None:
         """Initialize the Virtual oven device."""
-        super().__init__(config, PLATFORM_DOMAIN)
+        super().__init__(config)
 
         self._attr_device_class = VirtualTimerDeviceClass.OVEN
         self._dataset = load_dataset(Dataset.OVEN)
+
+    def async_start(self, **kwargs: Any) -> None:
+        """Start the coffee machine."""
+        op_type = kwargs.get("type")
+        handler = getattr(self, op_type, None)
+        if not handler:
+            raise ValueError(f"Invalid operation type: {op_type}")
+        handler(**kwargs)
 
     def bake(self, **kwargs: Any):
         """Bake."""

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import IntFlag
@@ -12,11 +12,14 @@ from typing import Any, final
 
 import voluptuous as vol
 
+from homeassistant.components.rasc.decorator import rasc_target_state
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (  # noqa: F401 # STATE_PAUSED/IDLE are API
     ATTR_BATTERY_LEVEL,
     ATTR_COMMAND,
+    CONF_EVENT,
     CONF_SERVICE,
+    RASC_START,
     SERVICE_TOGGLE,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
@@ -520,3 +523,37 @@ class StateVacuumEntity(_BaseVacuum):
         This method must be run in the event loop.
         """
         await self.hass.async_add_executor_job(self.pause)
+
+    def async_get_action_target_state(
+        self, action: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return expected state when action is complete."""
+
+        def _target_state(
+            target_complete_state: bool,
+        ) -> Callable[[bool], bool]:
+            @rasc_target_state(target_complete_state)
+            def match(value: bool) -> bool:
+                return value == target_complete_state
+
+            return match
+
+        target: dict[str, Any] = {}
+
+        if action[CONF_SERVICE] == SERVICE_START:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_cleaning"] = _target_state(True)
+            else:
+                target["is_cleaning"] = _target_state(False)
+                target["is_clean"] = _target_state(True)
+                target["status"] = _target_state("")
+
+        elif action[CONF_SERVICE] == SERVICE_STOP:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_returning"] = _target_state(True)
+            else:
+                target["is_returning"] = _target_state(False)
+                target["docked"] = _target_state(True)
+                target["status"] = _target_state(STATE_DOCKED)
+
+        return target

@@ -52,47 +52,35 @@ DRYER_SCHEMA = vol.Schema(
     )
 )
 
+async def async_setup_entity(hass, entity_config, coordinator):
+    entity_config = DRYER_SCHEMA(entity_config)
+    if entity_config[CONF_COORDINATED]:
+        entity = cast(
+            VirtualDryer, CoordinatedVirtualDryer(entity_config, coordinator)
+        )
+    else:
+        entity = VirtualDryer(entity_config)
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up dryers."""
+    if entity_config[CONF_SIMULATE_NETWORK]:
+        entity = cast(VirtualDryer, NetworkProxy(entity))
+        hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
 
-    coordinator: VirtualDataUpdateCoordinator = hass.data[COMPONENT_DOMAIN][
-        entry.entry_id
-    ]
-    entities: list[VirtualDryer] = []
-    for entity_config in get_entity_configs(
-        hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN
-    ):
-        entity_config = DRYER_SCHEMA(entity_config)
-        if entity_config[CONF_COORDINATED]:
-            entity = cast(
-                VirtualDryer, CoordinatedVirtualDryer(entity_config, coordinator)
-            )
-        else:
-            entity = VirtualDryer(entity_config)
-
-        if entity_config[CONF_SIMULATE_NETWORK]:
-            entity = cast(VirtualDryer, NetworkProxy(entity))
-            hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
-
-        entities.append(entity)
-
-    async_add_entities(entities)
+    return entity
 
 
-class VirtualDryer(VirtualEntity, VirtualTimer):
+class VirtualDryer(VirtualTimer):
     """Representation of a Virtual dryer."""
 
     def __init__(self, config) -> None:
         """Initialize the Virtual dryer device."""
-        super().__init__(config, PLATFORM_DOMAIN)
+        super().__init__(config)
 
         self._attr_device_class = VirtualTimerDeviceClass.DRYER
         self._dataset = load_dataset(Dataset.DRYER)
+
+    def async_start(self, **kwargs: Any) -> None:
+        """Start the coffee machine."""
+        self.dry(**kwargs)
 
     def dry(self, **kwargs: Any):
         """Dry."""

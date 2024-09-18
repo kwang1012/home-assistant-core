@@ -69,7 +69,7 @@ class VirtualEntity(RestoreEntity):
         """Initialize an Virtual Sensor."""
         # _LOGGER.debug(f"creating-virtual-{domain}={config}")
         self._config = config
-        self._attr_should_poll = not config.get(CONF_PUSH)
+        self._attr_should_poll = not config.get(CONF_PUSH, False)
         self._persistent = config.get(CONF_PERSISTENT)
 
         # Build name, entity id and unique id. We do this because historically

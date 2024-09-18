@@ -1,5 +1,6 @@
 """Provide support for a virtual coffee machine."""
 
+from datetime import timedelta
 import logging
 from typing import Any, cast
 
@@ -52,6 +53,21 @@ COFFEE_MACHINE_SCHEMA = vol.Schema(
 )
 
 
+async def async_setup_entity(hass, entity_config, coordinator):
+    entity_config = COFFEE_MACHINE_SCHEMA(entity_config)
+    if entity_config[CONF_COORDINATED]:
+        entity = cast(
+            VirtualCoffeeMachine, CoordinatedVirtualCoffeeMachine(entity_config, coordinator)
+        )
+    else:
+        entity = VirtualCoffeeMachine(entity_config)
+
+    if entity_config[CONF_SIMULATE_NETWORK]:
+        entity = cast(VirtualCoffeeMachine, NetworkProxy(entity))
+        hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
+
+    return entity
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -83,15 +99,23 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class VirtualCoffeeMachine(VirtualEntity, VirtualTimer):
+class VirtualCoffeeMachine(VirtualTimer):
     """Representation of a Virtual coffee machine."""
 
     def __init__(self, config) -> None:
         """Initialize the Virtual coffee machine device."""
-        super().__init__(config, PLATFORM_DOMAIN)
+        super().__init__(config)
 
         self._attr_device_class = VirtualTimerDeviceClass.COFFEE_MACHINE
         self._dataset = load_dataset(Dataset.COFFEE_MACHINE)
+
+    def async_start(self, **kwargs: Any) -> None:
+        """Start the coffee machine."""
+        coffee_type = kwargs.get("type")
+        handler = getattr(self, coffee_type, None)
+        if not handler:
+            raise ValueError(f"Invalid coffee type: {coffee_type}")
+        handler(**kwargs)
 
     def espresso(self, **kwargs: Any):
         """Make an espresso."""

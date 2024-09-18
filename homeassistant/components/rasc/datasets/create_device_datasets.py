@@ -39,8 +39,8 @@ devices_to_actions = {
         "spin": (5 * 60, 1),
     },
     "window": {
-        "open": (5, 1),
-        "close": (5, 1),
+        "open_cover": (5, 1),
+        "close_cover": (5, 1),
     },
 }
 

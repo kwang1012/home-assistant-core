@@ -3,8 +3,9 @@
 import asyncio
 from datetime import timedelta
 from enum import StrEnum
+import importlib
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import voluptuous as vol
 
@@ -21,7 +22,7 @@ from homeassistant.components.timer import (
     _format_timedelta,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_DEVICE_CLASS, ATTR_EDITABLE, STATE_CLOSED
+from homeassistant.const import ATTR_DEVICE_CLASS, ATTR_EDITABLE, CONF_ID, STATE_CLOSED
 from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
@@ -39,6 +40,9 @@ from .const import (
 from .coordinator import VirtualDataUpdateCoordinator
 from .entity import CoordinatedVirtualEntity, VirtualEntity, virtual_schema
 from .network import NetworkProxy
+
+if TYPE_CHECKING:
+    from .coffee_machine import COFFEE_MACHINE_SCHEMA, VirtualCoffeeMachine, CoordinatedVirtualCoffeeMachine
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -105,33 +109,46 @@ async def async_setup_entry(
     for entity_config in get_entity_configs(
         hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN
     ):
-        entity_config = TIMER_SCHEMA(entity_config)
-        if entity_config[CONF_COORDINATED]:
-            entity = cast(
-                VirtualTimer, CoordinatedVirtualTimer(entity_config, coordinator)
-            )
-        else:
-            entity = VirtualTimer(entity_config)
 
-        if entity_config[CONF_SIMULATE_NETWORK]:
-            entity = cast(VirtualTimer, NetworkProxy(entity))
-            hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
+        if entity_config[CONF_CLASS] in (VirtualTimerDeviceClass.COFFEE_MACHINE, VirtualTimerDeviceClass.DISHWASHER, VirtualTimerDeviceClass.DRYER, VirtualTimerDeviceClass.MICROWAVE, VirtualTimerDeviceClass.MOWER, VirtualTimerDeviceClass.OVEN, VirtualTimerDeviceClass.SPRINKLER, VirtualTimerDeviceClass.TOASTER, VirtualTimerDeviceClass.WASHER):
+            component = importlib.import_module(f"homeassistant.components.virtual.{entity_config[CONF_CLASS]}")
+            entity = await component.async_setup_entity(hass, entity_config, coordinator)
+
+        else:
+            entity_config = TIMER_SCHEMA(entity_config)
+            if entity_config[CONF_COORDINATED]:
+                entity = cast(
+                    VirtualTimer, CoordinatedVirtualTimer(entity_config, coordinator)
+                )
+            else:
+                entity = VirtualTimer(entity_config)
+
+            if entity_config[CONF_SIMULATE_NETWORK]:
+                entity = cast(VirtualTimer, NetworkProxy(entity))
+                hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
 
         entities.append(entity)
 
     async_add_entities(entities)
 
 
-class VirtualTimer(VirtualEntity, Timer):
+class VirtualTimer(Timer, VirtualEntity):
     """Representation of a Virtual cover."""
+
+    _attr_device_class: VirtualTimerDeviceClass | None = None
+    editable: bool = False
 
     def __init__(self, config) -> None:
         """Initialize the Virtual cover device."""
-        super().__init__(config, PLATFORM_DOMAIN)
+        VirtualEntity.__init__(self, config, PLATFORM_DOMAIN)
+        Timer.__init__(self, {
+            CONF_ID: self._attr_unique_id,
+            CONF_DURATION: "00:00:00",
+        })
 
+        self._attr_should_poll = True
         self._attr_is_remaining = False
-        if self._attr_device_class is None:
-            self._attr_device_class = VirtualTimerDeviceClass.COFFEE_MACHINE
+        self._attr_device_class = config.get(CONF_CLASS, VirtualTimerDeviceClass.COFFEE_MACHINE)
 
         self._change_time: timedelta = config.get(CONF_CHANGE_TIME)
 
@@ -186,6 +203,11 @@ class VirtualTimer(VirtualEntity, Timer):
         if self._restore:
             self._attr_extra_state_attributes[ATTR_RESTORE] = self._restore
 
+    @property
+    def is_remaining(self) -> bool:
+        """Return if the timer is remaining."""
+        return self._attr_is_remaining
+
     def _time_remaining(self) -> None:
         self._attr_is_remaining = True
         self._update_attributes()
@@ -196,7 +218,7 @@ class VirtualTimer(VirtualEntity, Timer):
 
     async def _start_operation(self):
         try:
-            self._remaining = self._duration.total_seconds() + 1
+            self._remaining = self._duration + timedelta(seconds=1)
             while True:
                 self._remaining -= timedelta(seconds=1)
                 if self._remaining.total_seconds() <= 0:
@@ -211,15 +233,19 @@ class VirtualTimer(VirtualEntity, Timer):
                 self._timer_done()
             self._update_attributes()
 
-    def _start(self, duration: float) -> None:
+    def _start(self, duration: float | None = None) -> None:
         """Start the timer."""
-        self._duration = timedelta(seconds=duration) if duration is not None else self._change_time
-        if self._duration == DEFAULT_CHANGE_TIME:
-            self._timer_done()
-        else:
-            self._time_remaining()
-            task = self.hass.async_create_task(self._start_operation())
-            self.timer_tasks.add(task)
+        if duration:
+            self._duration = timedelta(seconds=duration)
+        # if self._duration == DEFAULT_CHANGE_TIME:
+        #     self._timer_done()
+        # else:
+        self._time_remaining()
+        task = self.hass.async_create_task(self._start_operation())
+        self.timer_tasks.add(task)
+
+    def async_start(self, **kwargs: Any) -> None:
+        self._start()
 
     def stop(self, **kwargs: Any) -> None:
         """Stop the timer."""

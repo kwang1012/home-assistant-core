@@ -52,6 +52,22 @@ COFFEE_MACHINE_SCHEMA = vol.Schema(
 )
 
 
+async def async_setup_entity(hass, entity_config, coordinator):
+    entity_config = COFFEE_MACHINE_SCHEMA(entity_config)
+    if entity_config[CONF_COORDINATED]:
+        entity = cast(
+            VirtualDishwasher, CoordinatedVirtualDishwasher(entity_config, coordinator)
+        )
+    else:
+        entity = VirtualDishwasher(entity_config)
+
+    if entity_config[CONF_SIMULATE_NETWORK]:
+        entity = cast(VirtualDishwasher, NetworkProxy(entity))
+        hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
+
+    return entity
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -83,15 +99,23 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class VirtualDishwasher(VirtualEntity, VirtualTimer):
+class VirtualDishwasher(VirtualTimer):
     """Representation of a Virtual dishwasher."""
 
     def __init__(self, config) -> None:
         """Initialize the Virtual dishwasher device."""
-        super().__init__(config, PLATFORM_DOMAIN)
+        super().__init__(config)
 
         self._attr_device_class = VirtualTimerDeviceClass.DISHWASHER
         self._dataset = load_dataset(Dataset.DISHWASHER)
+
+    def async_start(self, **kwargs: Any) -> None:
+        """Start the coffee machine."""
+        wash_type = kwargs.get("type")
+        handler = getattr(self, wash_type, None)
+        if not handler:
+            raise ValueError(f"Invalid coffee type: {wash_type}")
+        handler(**kwargs)
 
     def wash(self, **kwargs: Any):
         """Wash."""

@@ -52,46 +52,35 @@ MICROWAVE_SCHEMA = vol.Schema(
 )
 
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up microwaves."""
+async def async_setup_entity(hass, entity_config, coordinator):
+    entity_config = MICROWAVE_SCHEMA(entity_config)
+    if entity_config[CONF_COORDINATED]:
+        entity = cast(
+            VirtualMicrowave, CoordinatedVirtualMicrowave(entity_config, coordinator)
+        )
+    else:
+        entity = VirtualMicrowave(entity_config)
 
-    coordinator: VirtualDataUpdateCoordinator = hass.data[COMPONENT_DOMAIN][
-        entry.entry_id
-    ]
-    entities: list[VirtualMicrowave] = []
-    for entity_config in get_entity_configs(
-        hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN
-    ):
-        entity_config = MICROWAVE_SCHEMA(entity_config)
-        if entity_config[CONF_COORDINATED]:
-            entity = cast(
-                VirtualMicrowave, CoordinatedVirtualMicrowave(entity_config, coordinator)
-            )
-        else:
-            entity = VirtualMicrowave(entity_config)
+    if entity_config[CONF_SIMULATE_NETWORK]:
+        entity = cast(VirtualMicrowave, NetworkProxy(entity))
+        hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
 
-        if entity_config[CONF_SIMULATE_NETWORK]:
-            entity = cast(VirtualMicrowave, NetworkProxy(entity))
-            hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
-
-        entities.append(entity)
-
-    async_add_entities(entities)
+    return entity
 
 
-class VirtualMicrowave(VirtualEntity, VirtualTimer):
+class VirtualMicrowave(VirtualTimer):
     """Representation of a Virtual microwave."""
 
     def __init__(self, config) -> None:
         """Initialize the Virtual microwave device."""
-        super().__init__(config, PLATFORM_DOMAIN)
+        super().__init__(config)
 
         self._attr_device_class = VirtualTimerDeviceClass.MICROWAVE
         self._dataset = load_dataset(Dataset.MICROWAVE)
+
+    def async_start(self, **kwargs: Any) -> None:
+        """Start the coffee machine."""
+        self.heat(**kwargs)
 
     def heat(self, **kwargs: Any):
         """Heat."""

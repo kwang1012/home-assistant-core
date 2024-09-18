@@ -8,6 +8,7 @@ from homeassistant import config_entries, exceptions
 
 from .cfg import UpgradeCfg
 from .const import *
+from .coordinator import VirtualDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,6 +21,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
     async def validate_input(self, user_input):
         for group, values in self.hass.data.get(COMPONENT_DOMAIN, {}).items():
             _LOGGER.debug(f"checking {group}")
+            if isinstance(values, VirtualDataUpdateCoordinator):
+                continue
             if group == user_input[ATTR_GROUP_NAME]:
                 raise GroupNameAlreadyUsed
             if values[ATTR_FILE_NAME] == user_input[ATTR_FILE_NAME]:

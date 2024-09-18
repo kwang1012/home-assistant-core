@@ -116,9 +116,6 @@ class RASCAbstraction:
             )
             return 0
         if state.compl_time_estimation == 0:  # 0 if there is no progress
-            LOGGER.debug(
-                f"{self.config.get(state.entity.entity_id, {}).get(RASC_WORST_Q, 2.0)=}"
-            )
             return (
                 time.time()
                 + self.config.get(state.entity.entity_id, {}).get(RASC_WORST_Q, 2.0)
@@ -355,6 +352,8 @@ class RASCAbstraction:
     ]:
         """Execute a service."""
 
+        LOGGER.debug("Execute service: %s", service_call)
+
         # for response wait-notify
         context = Context()
 
@@ -402,6 +401,7 @@ class StateDetector:
         self._is_uniform = bool(uniform)
         # no history is found, polling statically
         if history is None or len(history) == 0:
+            LOGGER.debug("No history found, polling statically.")
             self._static = True
             self._cur_poll = -1
             self._attr_upper_bound = None
@@ -410,6 +410,7 @@ class StateDetector:
         self._cur_poll = 0
         # only one data in history, poll exactly on that moment
         if len(history) == 1:
+            LOGGER.debug("Only one data in history, polling exactly on that moment.")
             self._polls = [history[0]]
             self._attr_upper_bound = None
             return
@@ -587,6 +588,7 @@ class RASCState:
         self._context = context
         self._store = store
         self._next_response = RASC_ACK
+        self.cancel_failure_detection = None
         # tracking
         if self._service_call.service == "set_temperature" and hasattr(
             self._entity, "current_temperature"
@@ -664,12 +666,13 @@ class RASCState:
 
     async def _track(self) -> None:
         if not self._platform:
+            LOGGER.warning("No platform to track.")
             return
         # let platform state polling the state
         next_interval = self._get_polling_interval()
-        # LOGGER.debug(
-        #     "Next polling interval for %s: %s", self._entity.entity_id, next_interval
-        # )
+        LOGGER.debug(
+            "Next polling interval for %s: %s", self._entity.entity_id, next_interval
+        )
         await self._platform.track_entity_state(self._entity, next_interval)
         self._polls_used += 1
         await self.update()
@@ -691,9 +694,8 @@ class RASCState:
         matched = True
         if not target_state:
             raise ValueError("no entry in rules.")
-
         for attr, match in target_state.items():
-            entity_attr = getattr(self._entity, attr)
+            entity_attr = getattr(self._entity, attr, None)
             if entity_attr is None:
                 LOGGER.warning(
                     "Entity %s does not have attribute %s", self._entity.entity_id, attr
@@ -828,6 +830,7 @@ class RASCState:
 
     def start_tracking(self, platform: EntityPlatform | DataUpdateCoordinator) -> None:
         """Start tracking the state."""
+        LOGGER.debug("Start tracking %s", self._entity.entity_id)
         self._next_response = RASC_START
         self._exec_time = time.time()
         coordinator: DataUpdateCoordinator | None = getattr(
@@ -860,7 +863,7 @@ class RASCState:
                 upper_bound = DEFAULT_FAILURE_TIMEOUT
         else:
             upper_bound = DEFAULT_FAILURE_TIMEOUT
-        async_track_point_in_time(
+        self.cancel_failure_detection = async_track_point_in_time(
             self.hass,
             self._check_failure,
             dt_util.utcnow() + timedelta(seconds=upper_bound),
@@ -891,6 +894,8 @@ class RASCState:
             self._attr_started = True
         self._attr_completed = True
         self._next_response = None
+        if self.cancel_failure_detection:
+            self.cancel_failure_detection()
         async with self._context.cv:
             self._context.cv.notify_all()
         LOGGER.debug(

@@ -13,15 +13,19 @@
             "dry"
         ],
         "door": [
-            "open",
-            "close"
+            "open_cover",
+            "close_cover"
         ],
-        "dryer": ["dry"],
+        "dryer": [
+            "dry"
+        ],
         "light": [
             "turn_on",
             "turn_off"
         ],
-        "microwave": ["heat"],
+        "microwave": [
+            "heat"
+        ],
         "mower": [
             "mow",
             "return_to_base"
@@ -36,16 +40,20 @@
             "down"
         ],
         "shade": [
-            "up",
-            "down"
+            "open_cover",
+            "close_cover"
         ],
-        "sprinkler": ["water"],
+        "sprinkler": [
+            "water"
+        ],
         "thermostat": [
             "heat",
             "cool",
             "off"
         ],
-        "toaster": ["toast"],
+        "toaster": [
+            "toast"
+        ],
         "vacuum": [
             "clean",
             "return_to_base"
@@ -56,8 +64,8 @@
             "spin"
         ],
         "window": [
-            "open",
-            "close"
+            "open_cover",
+            "close_cover"
         ]
     },
     "smart_spaces": {

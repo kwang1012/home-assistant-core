@@ -53,46 +53,34 @@ OVEN_SCHEMA = vol.Schema(
 )
 
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up sprinklers."""
+async def async_setup_entity(hass, entity_config, coordinator):
+    entity_config = OVEN_SCHEMA(entity_config)
+    if entity_config[CONF_COORDINATED]:
+        entity = cast(
+            VirtualSprinkler, CoordinatedVirtualSprinkler(entity_config, coordinator)
+        )
+    else:
+        entity = VirtualSprinkler(entity_config)
 
-    coordinator: VirtualDataUpdateCoordinator = hass.data[COMPONENT_DOMAIN][
-        entry.entry_id
-    ]
-    entities: list[VirtualSprinkler] = []
-    for entity_config in get_entity_configs(
-        hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN
-    ):
-        entity_config = OVEN_SCHEMA(entity_config)
-        if entity_config[CONF_COORDINATED]:
-            entity = cast(
-                VirtualSprinkler, CoordinatedVirtualSprinkler(entity_config, coordinator)
-            )
-        else:
-            entity = VirtualSprinkler(entity_config)
+    if entity_config[CONF_SIMULATE_NETWORK]:
+        entity = cast(VirtualSprinkler, NetworkProxy(entity))
+        hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
 
-        if entity_config[CONF_SIMULATE_NETWORK]:
-            entity = cast(VirtualSprinkler, NetworkProxy(entity))
-            hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
+    return entity
 
-        entities.append(entity)
-
-    async_add_entities(entities)
-
-
-class VirtualSprinkler(VirtualEntity, VirtualTimer):
+class VirtualSprinkler(VirtualTimer):
     """Representation of a Virtual sprinkler."""
 
     def __init__(self, config) -> None:
         """Initialize the Virtual sprinkler device."""
-        super().__init__(config, PLATFORM_DOMAIN)
+        super().__init__(config)
 
         self._attr_device_class = VirtualTimerDeviceClass.OVEN
         self._dataset = load_dataset(Dataset.OVEN)
+
+    def async_start(self, **kwargs: Any) -> None:
+        """Start the coffee machine."""
+        self.water(**kwargs)
 
     def water(self, **kwargs: Any):
         """Water."""

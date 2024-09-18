@@ -1,0 +1,494 @@
+devices:
+  apartment_coffee_machine_0:
+  - class: coffee_machine
+    name: apartment_coffee_machine_0
+    platform: timer
+  apartment_dishwasher_0:
+  - class: dishwasher
+    name: apartment_dishwasher_0
+    platform: timer
+  apartment_door_0:
+  - class: door
+    name: apartment_door_0
+    platform: cover
+  apartment_dryer_0:
+  - class: dryer
+    name: apartment_dryer_0
+    platform: timer
+  apartment_light_0:
+  - name: apartment_light_0
+    platform: light
+  apartment_light_1:
+  - name: apartment_light_1
+    platform: light
+  apartment_light_2:
+  - name: apartment_light_2
+    platform: light
+  apartment_light_3:
+  - name: apartment_light_3
+    platform: light
+  apartment_light_4:
+  - name: apartment_light_4
+    platform: light
+  apartment_light_5:
+  - name: apartment_light_5
+    platform: light
+  apartment_light_6:
+  - name: apartment_light_6
+    platform: light
+  apartment_microwave_0:
+  - class: microwave
+    name: apartment_microwave_0
+    platform: timer
+  apartment_oven_0:
+  - class: oven
+    name: apartment_oven_0
+    platform: timer
+  apartment_shade_0:
+  - class: shade
+    name: apartment_shade_0
+    platform: cover
+  apartment_shade_1:
+  - class: shade
+    name: apartment_shade_1
+    platform: cover
+  apartment_shade_2:
+  - class: shade
+    name: apartment_shade_2
+    platform: cover
+  apartment_thermostat_0:
+  - name: apartment_thermostat_0
+    platform: climate
+  apartment_toaster_0:
+  - class: toaster
+    name: apartment_toaster_0
+    platform: timer
+  apartment_vacuum_0:
+  - name: apartment_vacuum_0
+    platform: vacuum
+  apartment_washer_0:
+  - class: washer
+    name: apartment_washer_0
+    platform: timer
+  apartment_window_0:
+  - class: window
+    name: apartment_window_0
+    platform: cover
+  apartment_window_1:
+  - class: window
+    name: apartment_window_1
+    platform: cover
+  apartment_window_2:
+  - class: window
+    name: apartment_window_2
+    platform: cover
+  house1fl_coffee_machine_0:
+  - class: coffee_machine
+    name: house1fl_coffee_machine_0
+    platform: timer
+  house1fl_dishwasher_0:
+  - class: dishwasher
+    name: house1fl_dishwasher_0
+    platform: timer
+  house1fl_door_0:
+  - class: door
+    name: house1fl_door_0
+    platform: cover
+  house1fl_door_1:
+  - class: door
+    name: house1fl_door_1
+    platform: cover
+  house1fl_dryer_0:
+  - class: dryer
+    name: house1fl_dryer_0
+    platform: timer
+  house1fl_light_0:
+  - name: house1fl_light_0
+    platform: light
+  house1fl_light_1:
+  - name: house1fl_light_1
+    platform: light
+  house1fl_light_10:
+  - name: house1fl_light_10
+    platform: light
+  house1fl_light_11:
+  - name: house1fl_light_11
+    platform: light
+  house1fl_light_12:
+  - name: house1fl_light_12
+    platform: light
+  house1fl_light_13:
+  - name: house1fl_light_13
+    platform: light
+  house1fl_light_14:
+  - name: house1fl_light_14
+    platform: light
+  house1fl_light_2:
+  - name: house1fl_light_2
+    platform: light
+  house1fl_light_3:
+  - name: house1fl_light_3
+    platform: light
+  house1fl_light_4:
+  - name: house1fl_light_4
+    platform: light
+  house1fl_light_5:
+  - name: house1fl_light_5
+    platform: light
+  house1fl_light_6:
+  - name: house1fl_light_6
+    platform: light
+  house1fl_light_7:
+  - name: house1fl_light_7
+    platform: light
+  house1fl_light_8:
+  - name: house1fl_light_8
+    platform: light
+  house1fl_light_9:
+  - name: house1fl_light_9
+    platform: light
+  house1fl_microwave_0:
+  - class: microwave
+    name: house1fl_microwave_0
+    platform: timer
+  house1fl_mower_0:
+  - class: mower
+    name: house1fl_mower_0
+    platform: timer
+  house1fl_oven_0:
+  - class: oven
+    name: house1fl_oven_0
+    platform: timer
+  house1fl_shade_0:
+  - class: shade
+    name: house1fl_shade_0
+    platform: cover
+  house1fl_shade_1:
+  - class: shade
+    name: house1fl_shade_1
+    platform: cover
+  house1fl_shade_2:
+  - class: shade
+    name: house1fl_shade_2
+    platform: cover
+  house1fl_shade_3:
+  - class: shade
+    name: house1fl_shade_3
+    platform: cover
+  house1fl_shade_4:
+  - class: shade
+    name: house1fl_shade_4
+    platform: cover
+  house1fl_sprinkler_0:
+  - class: sprinkler
+    name: house1fl_sprinkler_0
+    platform: timer
+  house1fl_sprinkler_1:
+  - class: sprinkler
+    name: house1fl_sprinkler_1
+    platform: timer
+  house1fl_sprinkler_2:
+  - class: sprinkler
+    name: house1fl_sprinkler_2
+    platform: timer
+  house1fl_sprinkler_3:
+  - class: sprinkler
+    name: house1fl_sprinkler_3
+    platform: timer
+  house1fl_thermostat_0:
+  - name: house1fl_thermostat_0
+    platform: climate
+  house1fl_toaster_0:
+  - class: toaster
+    name: house1fl_toaster_0
+    platform: timer
+  house1fl_vacuum_0:
+  - name: house1fl_vacuum_0
+    platform: vacuum
+  house1fl_washer_0:
+  - class: washer
+    name: house1fl_washer_0
+    platform: timer
+  house1fl_window_0:
+  - class: window
+    name: house1fl_window_0
+    platform: cover
+  house1fl_window_1:
+  - class: window
+    name: house1fl_window_1
+    platform: cover
+  house1fl_window_2:
+  - class: window
+    name: house1fl_window_2
+    platform: cover
+  house1fl_window_3:
+  - class: window
+    name: house1fl_window_3
+    platform: cover
+  house1fl_window_4:
+  - class: window
+    name: house1fl_window_4
+    platform: cover
+  house2fl_coffee_machine_0:
+  - class: coffee_machine
+    name: house2fl_coffee_machine_0
+    platform: timer
+  house2fl_dishwasher_0:
+  - class: dishwasher
+    name: house2fl_dishwasher_0
+    platform: timer
+  house2fl_door_0:
+  - class: door
+    name: house2fl_door_0
+    platform: cover
+  house2fl_door_1:
+  - class: door
+    name: house2fl_door_1
+    platform: cover
+  house2fl_dryer_0:
+  - class: dryer
+    name: house2fl_dryer_0
+    platform: timer
+  house2fl_light_0:
+  - name: house2fl_light_0
+    platform: light
+  house2fl_light_1:
+  - name: house2fl_light_1
+    platform: light
+  house2fl_light_10:
+  - name: house2fl_light_10
+    platform: light
+  house2fl_light_11:
+  - name: house2fl_light_11
+    platform: light
+  house2fl_light_12:
+  - name: house2fl_light_12
+    platform: light
+  house2fl_light_13:
+  - name: house2fl_light_13
+    platform: light
+  house2fl_light_14:
+  - name: house2fl_light_14
+    platform: light
+  house2fl_light_15:
+  - name: house2fl_light_15
+    platform: light
+  house2fl_light_16:
+  - name: house2fl_light_16
+    platform: light
+  house2fl_light_17:
+  - name: house2fl_light_17
+    platform: light
+  house2fl_light_18:
+  - name: house2fl_light_18
+    platform: light
+  house2fl_light_19:
+  - name: house2fl_light_19
+    platform: light
+  house2fl_light_2:
+  - name: house2fl_light_2
+    platform: light
+  house2fl_light_20:
+  - name: house2fl_light_20
+    platform: light
+  house2fl_light_21:
+  - name: house2fl_light_21
+    platform: light
+  house2fl_light_22:
+  - name: house2fl_light_22
+    platform: light
+  house2fl_light_23:
+  - name: house2fl_light_23
+    platform: light
+  house2fl_light_24:
+  - name: house2fl_light_24
+    platform: light
+  house2fl_light_25:
+  - name: house2fl_light_25
+    platform: light
+  house2fl_light_26:
+  - name: house2fl_light_26
+    platform: light
+  house2fl_light_27:
+  - name: house2fl_light_27
+    platform: light
+  house2fl_light_28:
+  - name: house2fl_light_28
+    platform: light
+  house2fl_light_29:
+  - name: house2fl_light_29
+    platform: light
+  house2fl_light_3:
+  - name: house2fl_light_3
+    platform: light
+  house2fl_light_4:
+  - name: house2fl_light_4
+    platform: light
+  house2fl_light_5:
+  - name: house2fl_light_5
+    platform: light
+  house2fl_light_6:
+  - name: house2fl_light_6
+    platform: light
+  house2fl_light_7:
+  - name: house2fl_light_7
+    platform: light
+  house2fl_light_8:
+  - name: house2fl_light_8
+    platform: light
+  house2fl_light_9:
+  - name: house2fl_light_9
+    platform: light
+  house2fl_microwave_0:
+  - class: microwave
+    name: house2fl_microwave_0
+    platform: timer
+  house2fl_mower_0:
+  - class: mower
+    name: house2fl_mower_0
+    platform: timer
+  house2fl_oven_0:
+  - class: oven
+    name: house2fl_oven_0
+    platform: timer
+  house2fl_shade_0:
+  - class: shade
+    name: house2fl_shade_0
+    platform: cover
+  house2fl_shade_1:
+  - class: shade
+    name: house2fl_shade_1
+    platform: cover
+  house2fl_shade_2:
+  - class: shade
+    name: house2fl_shade_2
+    platform: cover
+  house2fl_shade_3:
+  - class: shade
+    name: house2fl_shade_3
+    platform: cover
+  house2fl_shade_4:
+  - class: shade
+    name: house2fl_shade_4
+    platform: cover
+  house2fl_shade_5:
+  - class: shade
+    name: house2fl_shade_5
+    platform: cover
+  house2fl_shade_6:
+  - class: shade
+    name: house2fl_shade_6
+    platform: cover
+  house2fl_shade_7:
+  - class: shade
+    name: house2fl_shade_7
+    platform: cover
+  house2fl_shade_8:
+  - class: shade
+    name: house2fl_shade_8
+    platform: cover
+  house2fl_shade_9:
+  - class: shade
+    name: house2fl_shade_9
+    platform: cover
+  house2fl_sprinkler_0:
+  - class: sprinkler
+    name: house2fl_sprinkler_0
+    platform: timer
+  house2fl_sprinkler_1:
+  - class: sprinkler
+    name: house2fl_sprinkler_1
+    platform: timer
+  house2fl_sprinkler_2:
+  - class: sprinkler
+    name: house2fl_sprinkler_2
+    platform: timer
+  house2fl_sprinkler_3:
+  - class: sprinkler
+    name: house2fl_sprinkler_3
+    platform: timer
+  house2fl_sprinkler_4:
+  - class: sprinkler
+    name: house2fl_sprinkler_4
+    platform: timer
+  house2fl_sprinkler_5:
+  - class: sprinkler
+    name: house2fl_sprinkler_5
+    platform: timer
+  house2fl_sprinkler_6:
+  - class: sprinkler
+    name: house2fl_sprinkler_6
+    platform: timer
+  house2fl_sprinkler_7:
+  - class: sprinkler
+    name: house2fl_sprinkler_7
+    platform: timer
+  house2fl_sprinkler_8:
+  - class: sprinkler
+    name: house2fl_sprinkler_8
+    platform: timer
+  house2fl_sprinkler_9:
+  - class: sprinkler
+    name: house2fl_sprinkler_9
+    platform: timer
+  house2fl_thermostat_0:
+  - name: house2fl_thermostat_0
+    platform: climate
+  house2fl_thermostat_1:
+  - name: house2fl_thermostat_1
+    platform: climate
+  house2fl_toaster_0:
+  - class: toaster
+    name: house2fl_toaster_0
+    platform: timer
+  house2fl_vacuum_0:
+  - name: house2fl_vacuum_0
+    platform: vacuum
+  house2fl_vacuum_1:
+  - name: house2fl_vacuum_1
+    platform: vacuum
+  house2fl_washer_0:
+  - class: washer
+    name: house2fl_washer_0
+    platform: timer
+  house2fl_window_0:
+  - class: window
+    name: house2fl_window_0
+    platform: cover
+  house2fl_window_1:
+  - class: window
+    name: house2fl_window_1
+    platform: cover
+  house2fl_window_2:
+  - class: window
+    name: house2fl_window_2
+    platform: cover
+  house2fl_window_3:
+  - class: window
+    name: house2fl_window_3
+    platform: cover
+  house2fl_window_4:
+  - class: window
+    name: house2fl_window_4
+    platform: cover
+  house2fl_window_5:
+  - class: window
+    name: house2fl_window_5
+    platform: cover
+  house2fl_window_6:
+  - class: window
+    name: house2fl_window_6
+    platform: cover
+  house2fl_window_7:
+  - class: window
+    name: house2fl_window_7
+    platform: cover
+  house2fl_window_8:
+  - class: window
+    name: house2fl_window_8
+    platform: cover
+  house2fl_window_9:
+  - class: window
+    name: house2fl_window_9
+    platform: cover
+version: 1

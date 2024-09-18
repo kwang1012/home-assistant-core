@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+from datetime import timedelta
 from enum import Enum
 import json
 import logging
@@ -87,6 +88,12 @@ class OverheadMeasurement:
         return f"om_{self._config[CONF_SCHEDULING_POLICY]}_{self._config[CONF_RESCHEDULING_POLICY]}_{self._config[CONF_RESCHEDULING_TRIGGER]}_{self._config[ACTION_LENGTH_ESTIMATION]}_{filename}"
 
 
+def _format_timedelta(delta: timedelta):
+    total_seconds = delta.total_seconds()
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{int(hours)}:{int(minutes):02}:{int(seconds):02}"
+
 def fire(
     hass: HomeAssistant,
     rasc_type: str,
@@ -112,7 +119,7 @@ def fire(
             ATTR_SERVICE: action,
             ATTR_ENTITY_ID: entity_id,
             **{
-                str(key): value
+                str(key): _format_timedelta(value) if isinstance(value, timedelta) else value
                 for key, value in service_data.items()
                 if key != ATTR_ENTITY_ID
             },

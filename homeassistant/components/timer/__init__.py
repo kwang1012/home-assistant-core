@@ -4,16 +4,21 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timedelta
 import logging
-from typing import Self
+from typing import Any, Self
 
 import voluptuous as vol
 
+from homeassistant.components.rasc.decorator import rasc_target_state
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_EDITABLE,
     ATTR_ENTITY_ID,
+    CONF_EVENT,
     CONF_ICON,
     CONF_ID,
     CONF_NAME,
+    CONF_SERVICE,
+    RASC_START,
     SERVICE_RELOAD,
 )
 from homeassistant.core import HomeAssistant, ServiceCall, callback
@@ -110,7 +115,8 @@ RELOAD_SERVICE_SCHEMA = vol.Schema({})
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up an input select."""
-    component = EntityComponent[Timer](_LOGGER, DOMAIN, hass)
+
+    hass.data[DOMAIN] = component = EntityComponent[Timer](_LOGGER, DOMAIN, hass)
     id_manager = collection.IDManager()
 
     yaml_collection = collection.YamlCollection(
@@ -155,7 +161,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     )
     component.async_register_entity_service(
         SERVICE_START,
-        {vol.Optional(ATTR_DURATION, default=DEFAULT_DURATION): cv.time_period},
+        {vol.Optional(ATTR_DURATION, default=DEFAULT_DURATION): cv.time_period, vol.Optional("type"): cv.string},
         "async_start",
     )
     component.async_register_entity_service(SERVICE_PAUSE, {}, "async_pause")
@@ -169,6 +175,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     return True
 
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up a config entry."""
+    component: EntityComponent[Timer] = hass.data[DOMAIN]
+
+    return await component.async_setup_entry(entry)
 
 class TimerStorageCollection(collection.DictStorageCollection):
     """Timer storage based collection."""
@@ -424,3 +435,27 @@ class Timer(collection.CollectionEntity, RestoreEntity):
         self._duration = cv.time_period_str(config[CONF_DURATION])
         self._restore = config.get(CONF_RESTORE, DEFAULT_RESTORE)
         self.async_write_ha_state()
+
+    def async_get_action_target_state(
+        self, action: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return expected state when action is complete."""
+
+        def _target_state(
+            target_complete_state: bool,
+        ) -> Callable[[bool], bool]:
+            @rasc_target_state(target_complete_state)
+            def match(value: bool) -> bool:
+                return value == target_complete_state
+
+            return match
+
+        target: dict[str, Any] = {}
+
+        if action[CONF_SERVICE] == SERVICE_START:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_remaining"] = _target_state(True)
+            else:
+                target["is_remaining"] = _target_state(False)
+
+        return target

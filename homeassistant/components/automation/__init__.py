@@ -11,6 +11,7 @@ import os
 from typing import Any, Optional, Protocol, cast
 
 import voluptuous as vol
+import yaml
 
 from homeassistant.components import websocket_api
 from homeassistant.components.blueprint import CONF_USE_BLUEPRINT
@@ -99,7 +100,7 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import bind_hass
 from homeassistant.util.dt import parse_datetime
 
-from .config import AutomationConfig
+from .config import AutomationConfig, _async_validate_config_item
 from .const import (
     CONF_ACTION,
     CONF_INITIAL_STATE,
@@ -963,6 +964,11 @@ async def _prepare_automation_config(
     automation_configs: list[AutomationEntityConfig] = []
 
     conf: list[ConfigType] = config[DOMAIN]
+
+    if True or config["rasc"].get(OVERHEAD_MEASUREMENT):
+        generated_conf: list[ConfigType] = yaml.safe_load(open("homeassistant/components/rasc/datasets/generated_routines.yaml", "r"))
+        for generated in generated_conf:
+            conf.append(await _async_validate_config_item(hass, generated, False, True))
 
     for list_no, config_block in enumerate(conf):
         raw_config = cast(AutomationConfig, config_block).raw_config

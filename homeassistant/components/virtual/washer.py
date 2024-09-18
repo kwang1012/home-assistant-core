@@ -53,43 +53,28 @@ WASHER_SCHEMA = vol.Schema(
 )
 
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up washers."""
+async def async_setup_entity(hass, entity_config, coordinator):
+    entity_config = WASHER_SCHEMA(entity_config)
+    if entity_config[CONF_COORDINATED]:
+        entity = cast(
+            VirtualWasher, CoordinatedVirtualWasher(entity_config, coordinator)
+        )
+    else:
+        entity = VirtualWasher(entity_config)
 
-    coordinator: VirtualDataUpdateCoordinator = hass.data[COMPONENT_DOMAIN][
-        entry.entry_id
-    ]
-    entities: list[VirtualWasher] = []
-    for entity_config in get_entity_configs(
-        hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN
-    ):
-        entity_config = WASHER_SCHEMA(entity_config)
-        if entity_config[CONF_COORDINATED]:
-            entity = cast(
-                VirtualWasher, CoordinatedVirtualWasher(entity_config, coordinator)
-            )
-        else:
-            entity = VirtualWasher(entity_config)
+    if entity_config[CONF_SIMULATE_NETWORK]:
+        entity = cast(VirtualWasher, NetworkProxy(entity))
+        hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
 
-        if entity_config[CONF_SIMULATE_NETWORK]:
-            entity = cast(VirtualWasher, NetworkProxy(entity))
-            hass.data[COMPONENT_NETWORK][entity.entity_id] = entity
-
-        entities.append(entity)
-
-    async_add_entities(entities)
+    return entity
 
 
-class VirtualWasher(VirtualEntity, VirtualTimer):
+class VirtualWasher(VirtualTimer):
     """Representation of a Virtual washer."""
 
     def __init__(self, config) -> None:
         """Initialize the Virtual washer device."""
-        super().__init__(config, PLATFORM_DOMAIN)
+        super().__init__(config)
 
         self._attr_device_class = VirtualTimerDeviceClass.WASHER
         self._dataset = load_dataset(Dataset.WASHER)

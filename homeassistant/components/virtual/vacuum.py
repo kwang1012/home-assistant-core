@@ -12,6 +12,7 @@ from homeassistant.components.vacuum import (
     ATTR_CLEANED_AREA,
     ATTR_STATUS,
     DOMAIN as PLATFORM_DOMAIN,
+    StateVacuumEntity,
     VacuumEntity,
     VacuumEntityFeature,
     STATE_CLEANING,
@@ -43,31 +44,19 @@ _LOGGER = logging.getLogger(__name__)
 
 DEPENDENCIES = [COMPONENT_DOMAIN]
 
-CONF_CHANGE_TIME = "opening_time"
-
-DEFAULT_COVER_VALUE = "open"
+DEFAULT_VACUUM_VALUE = "off"
 DEFAULT_CHANGE_TIME = timedelta(seconds=0)
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     virtual_schema(
-        DEFAULT_COVER_VALUE,
-        {
-            vol.Optional(CONF_CLASS): cv.string,
-            vol.Optional(CONF_CHANGE_TIME, default=DEFAULT_CHANGE_TIME): vol.All(
-                cv.time_period, cv.positive_timedelta
-            ),
-        },
+        DEFAULT_VACUUM_VALUE,
+        {}
     )
 )
-COVER_SCHEMA = vol.Schema(
+VACUUM_SCHEMA = vol.Schema(
     virtual_schema(
-        DEFAULT_COVER_VALUE,
-        {
-            vol.Optional(CONF_CLASS): cv.string,
-            vol.Optional(CONF_CHANGE_TIME, default=DEFAULT_CHANGE_TIME): vol.All(
-                cv.time_period, cv.positive_timedelta
-            ),
-        },
+        DEFAULT_VACUUM_VALUE,
+        {}
     )
 )
 
@@ -86,7 +75,7 @@ async def async_setup_entry(
     for entity_config in get_entity_configs(
         hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN
     ):
-        entity_config = COVER_SCHEMA(entity_config)
+        entity_config = VACUUM_SCHEMA(entity_config)
         if entity_config[CONF_COORDINATED]:
             entity = cast(
                 VirtualVacuum, CoordinatedVirtualVacuum(entity_config, coordinator)
@@ -103,14 +92,13 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class VirtualVacuum(VirtualEntity, VacuumEntity):
+class VirtualVacuum(VirtualEntity, StateVacuumEntity):
     """Representation of a Virtual vacuum."""
 
-    def __init__(self, name: str, supported_features: VacuumEntityFeature) -> None:
+    def __init__(self, config) -> None:
         """Initialize the vacuum."""
-        super().__init__(name, PLATFORM_DOMAIN)
-        self._attr_name = name
-        self._attr_supported_features = supported_features
+        super().__init__(config, PLATFORM_DOMAIN)
+        self._attr_supported_features = VacuumEntityFeature.START | VacuumEntityFeature.STOP
         self._attr_status = STATE_DOCKED
         self._cleaned_area: float = 0
         self._distance: float = 0
@@ -118,7 +106,7 @@ class VirtualVacuum(VirtualEntity, VacuumEntity):
         self._is_clean = False
         self._is_returning = False
         self._docked = True
-        self._dataset = load_dataset("vacuum")
+        self._dataset = load_dataset(Dataset.VACUUM)
         self.tasks: set[asyncio.Task] = set()
 
     def _create_state(self, config):
@@ -135,9 +123,9 @@ class VirtualVacuum(VirtualEntity, VacuumEntity):
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
 
-        self._attr_status = state.get(ATTR_STATUS, STATE_DOCKED)
-        self._cleaned_area = state.get(ATTR_CLEANED_AREA, 0)
-        self._distance = state.get("distance", 0)
+        self._attr_status = state.attributes.get(ATTR_STATUS, STATE_DOCKED)
+        self._cleaned_area = state.attributes.get(ATTR_CLEANED_AREA, 0.0)
+        self._distance = state.attributes.get("distance", 0.0)
         self._is_cleaning = False
         self._is_clean = self._cleaned_area >= 100
         self._is_returning = False
@@ -170,6 +158,31 @@ class VirtualVacuum(VirtualEntity, VacuumEntity):
     def cleaned_area(self) -> float:
         """Return the cleaned area."""
         return self._cleaned_area
+
+    @property
+    def is_cleaning(self) -> bool:
+        """Return if the vacuum is cleaning."""
+        return self._is_cleaning
+
+    @property
+    def is_clean(self) -> bool:
+        """Return if the vacuum is clean."""
+        return self._is_clean
+
+    @property
+    def is_returning(self) -> bool:
+        """Return if the vacuum is returning to the dock."""
+        return self._is_returning
+
+    @property
+    def docked(self) -> bool:
+        """Return if the vacuum is docked."""
+        return self._docked
+
+    @property
+    def status(self) -> str:
+        """Return the status of the vacuum."""
+        return self._attr_status
 
     def _cleaning(self):
         self._is_clean = False
@@ -227,20 +240,19 @@ class VirtualVacuum(VirtualEntity, VacuumEntity):
                 self._returned()
             self._update_attributes()
 
-    def clean(self, **kwargs: Any) -> None:
+    def async_start(self, **kwargs: Any) -> None:
         """Perform a spot clean-up."""
         self._cleaning()
         action_length = np.random.choice(self._dataset["clean"])
         task = self.hass.async_create_task(self._start_operation(action_length))
         self.tasks.add(task)
 
-    def return_to_base(self, **kwargs: Any) -> None:
+    def async_stop(self, **kwargs: Any) -> None:
         """Tell the vacuum to return to its dock."""
         self._returning()
         action_length = np.random.choice(self._dataset["return_to_base"])
         task = self.hass.async_create_task(self._start_operation(action_length))
         self.tasks.add(task)
-
 
 class CoordinatedVirtualVacuum(CoordinatedVirtualEntity, VirtualVacuum):
     """Representation of a Virtual switch."""

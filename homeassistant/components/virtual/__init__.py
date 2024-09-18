@@ -56,6 +56,8 @@ VIRTUAL_PLATFORMS = [
     Platform.LOCK,
     Platform.SENSOR,
     Platform.SWITCH,
+    Platform.VACUUM,
+    "timer"
 ]
 
 
