@@ -755,6 +755,10 @@ class ActionInfo:
         """Get end time."""
         return self._end_time
 
+    @end_time.setter
+    def end_time(self, new_end_time):
+        self._end_time = new_end_time
+
     @property
     def time_range(self) -> tuple[datetime, datetime]:
         """Get time range."""
@@ -886,6 +890,8 @@ class LineageTable:
         # slot where the start time is the key and the end time is the value
         self._free_slots: dict[str, Queue[datetime, datetime]] = {}
 
+        self.last_removed_time: None | datetime = None
+
     @property
     def locks(self) -> dict[str, str | None]:
         """Get locks."""
@@ -910,6 +916,27 @@ class LineageTable:
     def free_slots(self) -> dict[str, Queue[datetime, datetime]]:
         """Get free slots."""
         return self._free_slots
+
+    @property
+    def consistent_free_slots(self) -> dict[str, Queue[datetime, datetime]]:
+        """Get free slots consistent to lock queue."""
+        current_time = self.last_removed_time or datetime.now()
+        free_slots = {}
+        for entity_id, lock_queue in self._lock_queues.items():
+            free_slots[entity_id] = Queue[datetime, datetime]()
+            if not lock_queue:
+                free_slots[entity_id][current_time] = None
+                continue
+            start = current_time
+            end = None
+            for action_lock in lock_queue.values():
+                if action_lock:
+                    end = action_lock.start_time
+                    if start < end:
+                        free_slots[entity_id][start] = end
+                    start = action_lock.end_time
+            free_slots[entity_id][start] = None
+        return free_slots
 
     @free_slots.setter
     def free_slots(self, fs: dict[str, Queue[datetime, datetime]]) -> None:
@@ -1036,6 +1063,7 @@ class BaseScheduler:
         self, now: datetime, free_slots: dict[str, Queue[datetime, datetime]]
     ) -> None:
         """Remove all available time slots that have ended before now."""
+        self._lineage_table.last_removed_time = now
         for entity_id, _ in free_slots.items():
             filtered_time_slots = self.filter_ts(entity_id, now, free_slots)
             start_time, end_time = filtered_time_slots.top()
@@ -1225,7 +1253,7 @@ class BaseScheduler:
         slot_end = free_slots[entity_id].get(slot_start) if slot_start else None
 
         if not slot_start or not slot_end:
-            _LOGGER.error(
+            _LOGGER.warning(
                 "Failed to prelease the lock. Cannot find a slot before the action"
             )
             return None
@@ -1234,14 +1262,14 @@ class BaseScheduler:
         if (slot_end - max(slot_start, now)).total_seconds() < new_action.length(
             entity_id
         ).total_seconds():
-            _LOGGER.error(
+            _LOGGER.warning(
                 "Failed to prelease the lock. The slot is too small to place the action"
             )
             return None
 
         # Check if the serializability conflicts if the new action places before the action.
         if self.conflict_serializability_by_prelease(action, entity_id):
-            _LOGGER.error(
+            _LOGGER.warning(
                 "Failed to prelease the lock. Violate serializability while placing before the action %s",
                 action.action_id,
             )
@@ -1249,14 +1277,14 @@ class BaseScheduler:
 
         # Check if the determined serializability conflicts if the new action places before the action.
         if self.conflict_determined_serializability(action, "pre", lock_leasing_status):
-            _LOGGER.error(
+            _LOGGER.warning(
                 "Violate determined serializability. Failed to prelease the lock"
             )
             return None
 
         # Check if the action with the acquired key is running
         if self.action_running(action, entity_id, "pre"):
-            _LOGGER.error("Failed to prelease the lock. The action is running")
+            _LOGGER.warning("Failed to prelease the lock. The action is running")
             return None
 
         return slot_start
@@ -1290,7 +1318,7 @@ class BaseScheduler:
 
         # Check if the serializability would conflict if post-lease
         if self.conflict_serializability_by_postlease(action, entity_id, new_action):
-            _LOGGER.error(
+            _LOGGER.warning(
                 "Failed to postlease the lock. Violate seriailzability while placing after the action %s",
                 action.action_id,
             )
@@ -1300,14 +1328,14 @@ class BaseScheduler:
         if self.conflict_determined_serializability(
             action, "post", lock_leasing_status
         ):
-            _LOGGER.debug(
+            _LOGGER.warning(
                 "Failed to postlease the lock. Violate determined serializability"
             )
             return None
 
         # Check if the action with the acquired key is running
         if not self.action_running(action, entity_id, "post"):
-            _LOGGER.error(
+            _LOGGER.warning(
                 "The action %s is not running. Failed to postlease the lock",
                 action.action_id,
             )
@@ -2133,7 +2161,7 @@ class TimeLineScheduler(BaseScheduler):
                 entity_id = get_entity_id_from_number(self._hass, entity)
                 max_parent_end_time = max(now[entity_id], max_parent_end_time) if max_parent_end_time else now[entity_id]
 
-        _LOGGER.debug('max parent end time :%s', max_parent_end_time)
+        _LOGGER.debug("max parent end time :%s", max_parent_end_time)
         for entity in target_entities:
             entity_id = get_entity_id_from_number(self._hass, entity)
 
@@ -2986,7 +3014,7 @@ class RascalScheduler(BaseScheduler):
                 )
 
                 if success:
-                    if self._scheduling_policy != FCFS and not lock_leasing_status:
+                    if self._scheduling_policy == FCFS_POST and lock_leasing_status is None:
                         raise ValueError(
                             "Failed to schedule the routine {}. There should be a lock leasing status.".format(
                                 routine.routine_id
@@ -3252,17 +3280,19 @@ class RascalScheduler(BaseScheduler):
                         continue
                     _LOGGER.info(
                         "Reschedule overtime action %s on entity %s",
-                        action.action_id,
+                        prev_action.action_id,
                         entity_id,
                     )
                     event_data = {
                         CONF_TYPE: RASC_INCOMPLETE,
-                        ATTR_ACTION_ID: action.action_id,
+                        ATTR_ACTION_ID: prev_action.action_id,
                         ATTR_ENTITY_ID: entity_id,
                     }
                     event = Event("", event_data, time_fired=datetime.now())
                     await self._reschedule_handler(event)
+            await asyncio.sleep(0.1)
 
+        action.start_requested = True
         _LOGGER.info(
             "Start action %s at %s vs scheduled start time: %s",
             action.action_id,
@@ -3341,7 +3371,7 @@ class RascalScheduler(BaseScheduler):
                         {
                             CONF_TYPE: SCHEDULE_START,
                             ATTR_ACTION_ID: action.action_id,
-                            ATTR_ENTITY_ID: entity,
+                            ATTR_ENTITY_ID: entity_id,
                         },
                         time_fired=datetime.now(),
                     )
@@ -3360,6 +3390,13 @@ class RascalScheduler(BaseScheduler):
             lock_queues=self._lineage_table.lock_queues,
         )
 
+        if not self._are_prev_actions_over(action):
+            return False
+
+        # Check if the parent dependencies from the same routine are satisfied
+        if not self._are_parent_deps_satisfied(action):
+            return False
+
         if self._scheduling_policy in (FCFS, FCFS_POST, JIT):
             # Check if the action acquires all the locks
             target_entities = get_target_entities(self._hass, action.action)
@@ -3368,7 +3405,7 @@ class RascalScheduler(BaseScheduler):
                 != get_routine_id(action.action_id)
                 for entity in target_entities
             ):
-                _LOGGER.error(
+                _LOGGER.warning(
                     "Failed to get all the locks for the action %s",
                     action.action_id,
                 )
@@ -3406,16 +3443,7 @@ class RascalScheduler(BaseScheduler):
         if not routine_info.pass_eligibility:
             return False
 
-        if self.action_start_method == START_EVENT_BASED:
-            # Check if the previous actions on the common entities are over
-            if not self._are_prev_actions_over(action):
-                return False
-
-            # Check if the parent dependencies from the same routine are satisfied
-            if not self._are_parent_deps_satisfied(action):
-                return False
-
-        else:
+        if self.action_start_method == START_TIME_BASED:
             # Check if the action reach the start time
             target_entities = get_target_entities(self._hass, action.action)
             for entity in target_entities:
@@ -3548,6 +3576,12 @@ class RascalScheduler(BaseScheduler):
     async def handle_event(self, event: Event) -> None:  # noqa: C901
         """Handle event."""
         async with self.handle_event_lock:
+            if self._reschedule_handler is not None:
+                self.remove_time_slots_before_now(
+                    datetime.now(), self._lineage_table.free_slots
+                )
+                await self._reschedule_handler(event)
+
             event_type: Optional[str] = event.data.get(CONF_TYPE)
             entity_id: Optional[str] = event.data.get(CONF_ENTITY_ID)
             action_id: Optional[str] = event.data.get(ATTR_ACTION_ID)
@@ -3580,6 +3614,7 @@ class RascalScheduler(BaseScheduler):
                 return
 
             should_trigger_fcfs = False
+            should_trigger_jit = False
 
             if event_type == RASC_ACK:
                 if not self.is_action_ack(action, entity_id):
@@ -3649,31 +3684,35 @@ class RascalScheduler(BaseScheduler):
 
                 output_all(_LOGGER, lock_queues=self._lineage_table.lock_queues)
 
-                if self._scheduling_policy == FCFS_POST:
-                    await self._start_ready_routines_fcfs_post(entity_id)
+                should_trigger_jit = True
+                if self._scheduling_policy == JIT:
+                    should_trigger_jit = should_trigger_jit and not self._return_lock(action_id, entity_id)
 
-                elif self._scheduling_policy == JIT:
-                    if not self._return_lock(action_id, entity_id):
-                        await self._start_ready_routines_jit(entity_id)
-
-                elif self._scheduling_policy == TIMELINE:
-                    if self.action_start_method == START_TIME_BASED:
-                        self._start_ready_routines_tl(action_id, entity_id)
+                if self._scheduling_policy == TIMELINE and self.action_start_method == START_TIME_BASED:
+                    self._start_ready_routines_tl(action_id, entity_id)
 
                 # Check if the action is completed on all entities
-                if action.action_completed or not self._is_all_actions_complete(action):
-                    return
+                if not action.action_completed and self._is_all_actions_complete(action):
 
-                _LOGGER.info("All commands in the action %s is completed", action_id)
+                    _LOGGER.info("All commands in the action %s is completed", action_id)
 
-                self._set_action_completed(action_id)
+                    self._set_action_completed(action_id)
 
-                should_trigger_fcfs = await self._run_next_action(action, True)
+                    should_trigger_fcfs = await self._run_next_action(action, True)
 
             else:
                 output_all(_LOGGER, lock_queues=self._lineage_table.lock_queues)
 
-            await self._start_ready_actions()
+
+        if should_trigger_jit:
+            if self._scheduling_policy == FCFS_POST:
+                await self._start_ready_routines_fcfs_post(entity_id)
+
+            elif self._scheduling_policy == JIT:
+                await self._start_ready_routines_jit(entity_id)
+
+        await self._start_ready_actions()
+
         if self._scheduling_policy == FCFS and should_trigger_fcfs:
             await self._start_ready_routines_fcfs()
 
@@ -4090,7 +4129,6 @@ class RascalScheduler(BaseScheduler):
             return
 
         condition_pass = self._are_parent_deps_satisfied(next_action.action)
-        _LOGGER.info(f"{condition_pass=}")
         if condition_pass and self.action_start_method == START_TIME_BASED:
             _LOGGER.info("Action %s is ready to start", next_action.action_id)
             self.create_action_task(next_action.action)
