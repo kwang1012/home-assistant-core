@@ -777,10 +777,10 @@ class RASCState:
         # check complete state
         complete_state_matched = self._match_target_state(self._complete_state)
         # prevent hazardous changes
-        transition = self._transition
-        if complete_state_matched and (
-            transition is None or self.time_elapsed > transition / 2
-        ):
+        if complete_state_matched:
+        # and (
+        #     transition is None or self.time_elapsed > transition / 2
+        # ):
             # fire start response if haven't
             if not self.started:
                 await self.set_started()
