@@ -3276,16 +3276,20 @@ class RascalScheduler(BaseScheduler):
 
     async def _attempt_start_action(self, action: ActionEntity) -> None:
         """Start the given action if action start method is event-based."""
-        _LOGGER.debug("Try to start the action %s", action.action_id)
+        _LOGGER.debug("Attempt start action.")
+        if action.start_requested:
+            return
+
+        _LOGGER.debug("[attempt start action] Try to start the action %s", action.action_id)
 
         target_entities = get_target_entities(self._hass, action.action)
         if not target_entities:
             raise ValueError(f"Action {action.action_id} has no target entities.")
         random_entity_id = target_entities[0]
-        if random_entity_id not in self._lineage_table.lock_queues:
-            raise ValueError("Entity %s has no schedule." % random_entity_id)
         if action.action_id not in self._lineage_table.lock_queues[random_entity_id]:
-            return
+            _LOGGER.error(f"Action {action.action_id} on Entity {random_entity_id} has no schedule.")
+            exit(1)
+
         action_lock = self.get_action_info(action.action_id, random_entity_id)
         if not action_lock:
             raise ValueError(
@@ -3318,6 +3322,7 @@ class RascalScheduler(BaseScheduler):
                     datetime_to_string(datetime.now()),
                 )
 
+
             start_st = datetime.now()
             for entity in target_entities:
                 entity_id = get_entity_id_from_number(self._hass, entity)
@@ -3335,6 +3340,7 @@ class RascalScheduler(BaseScheduler):
                 #     self._lineage_table.free_slots[entity_id],
                 #     entity_id,
                 # )
+                action.schedule_start = True
                 await self._reschedule_handler(
                     Event(
                         "",
@@ -3349,6 +3355,7 @@ class RascalScheduler(BaseScheduler):
 
             action.start_requested = True
             self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
+        _LOGGER.debug("Attempt end action.")
 
     def _is_action_ready(self, action: ActionEntity) -> bool:
         """Check if the given action acquire all the associated locks to get executed."""
@@ -3561,10 +3568,10 @@ class RascalScheduler(BaseScheduler):
             ):
                 return
 
-            if event_type == RASC_COMPLETE:
-                self._metrics.record_action_end(
-                    event.time_fired, entity_id, action_id
-                )
+            # if event_type == RASC_COMPLETE:
+            #     self._metrics.record_action_end(
+            #         event.time_fired, entity_id, action_id
+            #     )
 
             if self._reschedule_handler is not None:
                 await self._reschedule_handler(event)
@@ -3582,6 +3589,9 @@ class RascalScheduler(BaseScheduler):
             should_trigger_fcfs = False
 
             if event_type == RASC_ACK:
+                # if self._lineage_table.lock_queues[entity_id][action_id].action_state in (RASC_ACK, RASC_START):
+                #     return
+
                 if not self.is_action_ack(action, entity_id):
                     # update the action state
                     self._update_action_state(action_id, entity_id, event_type)
@@ -3666,6 +3676,10 @@ class RascalScheduler(BaseScheduler):
 
                 _LOGGER.info("All commands in the action %s is completed", action_id)
 
+                self._metrics.record_action_end(
+                    event.time_fired, entity_id, action_id
+                )
+
                 self._set_action_completed(action_id)
 
                 should_trigger_fcfs = await self._run_next_action(action, True)
@@ -3679,6 +3693,8 @@ class RascalScheduler(BaseScheduler):
 
     async def _start_ready_actions(self) -> None:
         """Start the ready actions."""
+
+        _LOGGER.debug("Start ready actions")
         for lock_queue in self._lineage_table.lock_queues.values():
             _, action_lock = lock_queue.top()
             if action_lock is None:

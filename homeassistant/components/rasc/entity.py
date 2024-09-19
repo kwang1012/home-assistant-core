@@ -335,6 +335,7 @@ class ActionEntity:
         self._stop = asyncio.Event()
         self._attr_is_end_node = is_end_node
         self.start_requested: bool = False
+        self.schedule_start: bool = False
         self.is_waiting: bool = False
         self.start_lock = asyncio.Lock()
 
