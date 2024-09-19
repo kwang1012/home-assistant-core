@@ -56,6 +56,8 @@ if TYPE_CHECKING:
     from homeassistant.components.script import BaseScriptEntity
     from homeassistant.helpers.entity_component import EntityComponent
 
+import sys
+
 from homeassistant.helpers.rascalscheduler import (
     datetime_to_string,
     generate_duration,
@@ -796,7 +798,10 @@ class ActionInfo:
             )
         else:
             _LOGGER.info(
-                "[Action Info] Move action %s to %s-%s", self.action_id, new_start_time, new_end_time
+                "[Action Info] Move action %s to %s-%s",
+                self.action_id,
+                new_start_time,
+                new_end_time,
             )
         self._start_time = new_start_time
         self._end_time = new_end_time
@@ -934,7 +939,7 @@ class LineageTable:
 
         lt.free_slots = copy.deepcopy(self._free_slots)
 
-        #_LOGGER.log(logging.DEBUG, "Just duplicated lineage table!")
+        # _LOGGER.log(logging.DEBUG, "Just duplicated lineage table!")
         return lt
 
     def add_entity(self, entity_id: str) -> None:
@@ -1431,7 +1436,7 @@ class BaseScheduler:
             free_slots.insert_after(slot_st, action_end, slot_end)
             free_slots.updateitem(slot_st, action_st)
 
-        #_LOGGER.info("%s free slots: %s", entity_id or "", free_slots)
+        # _LOGGER.info("%s free slots: %s", entity_id or "", free_slots)
 
         return action_end
 
@@ -1603,7 +1608,7 @@ class BaseScheduler:
 
         _LOGGER.info("Start scheduling the routine %s", routine.routine_id)
 
-        #Remove time slots before now
+        # Remove time slots before now
         # self.remove_time_slots_before_now(
         #     datetime.now(), self._lineage_table.free_slots
         # )
@@ -2131,14 +2136,20 @@ class TimeLineScheduler(BaseScheduler):
             parent_target_entities = get_target_entities(self._hass, parent.action)
             for entity in parent_target_entities:
                 entity_id = get_entity_id_from_number(self._hass, entity)
-                max_parent_end_time = max(now[entity_id], max_parent_end_time) if max_parent_end_time else now[entity_id]
+                max_parent_end_time = (
+                    max(now[entity_id], max_parent_end_time)
+                    if max_parent_end_time
+                    else now[entity_id]
+                )
 
-        _LOGGER.debug('max parent end time :%s', max_parent_end_time)
+        _LOGGER.debug("max parent end time :%s", max_parent_end_time)
         for entity in target_entities:
             entity_id = get_entity_id_from_number(self._hass, entity)
 
             start_time, conflict = self.get_available_ts_in_case_tl(
-                max(now[entity_id], max_parent_end_time) if max_parent_end_time else now[entity_id],
+                max(now[entity_id], max_parent_end_time)
+                if max_parent_end_time
+                else now[entity_id],
                 free_slots,
                 entity_id,
                 lock_leasing_status,
@@ -2192,7 +2203,11 @@ class TimeLineScheduler(BaseScheduler):
         actual_start_time = max(group_action_start_time.values())
 
         for entity_id, start_time in group_slot_start_time.items():
-            action_st = max(actual_start_time, now[entity_id], max_parent_end_time) if max_parent_end_time else max(actual_start_time, now[entity_id])
+            action_st = (
+                max(actual_start_time, now[entity_id], max_parent_end_time)
+                if max_parent_end_time
+                else max(actual_start_time, now[entity_id])
+            )
             action_length = max(action.length(entity_id), timedelta(seconds=2))
             action_end = action_st + action_length
 
@@ -3280,15 +3295,19 @@ class RascalScheduler(BaseScheduler):
         if action.start_requested:
             return
 
-        _LOGGER.debug("[attempt start action] Try to start the action %s", action.action_id)
+        _LOGGER.debug(
+            "[attempt start action] Try to start the action %s", action.action_id
+        )
 
         target_entities = get_target_entities(self._hass, action.action)
         if not target_entities:
             raise ValueError(f"Action {action.action_id} has no target entities.")
         random_entity_id = target_entities[0]
         if action.action_id not in self._lineage_table.lock_queues[random_entity_id]:
-            _LOGGER.error(f"Action {action.action_id} on Entity {random_entity_id} has no schedule.")
-            exit(1)
+            _LOGGER.error(
+                f"Action {action.action_id} on Entity {random_entity_id} has no schedule."
+            )
+            sys.exit(1)
 
         action_lock = self.get_action_info(action.action_id, random_entity_id)
         if not action_lock:
@@ -3321,7 +3340,6 @@ class RascalScheduler(BaseScheduler):
                     datetime_to_string(action_lock.start_time),
                     datetime_to_string(datetime.now()),
                 )
-
 
             start_st = datetime.now()
             for entity in target_entities:
@@ -3676,9 +3694,7 @@ class RascalScheduler(BaseScheduler):
 
                 _LOGGER.info("All commands in the action %s is completed", action_id)
 
-                self._metrics.record_action_end(
-                    event.time_fired, entity_id, action_id
-                )
+                self._metrics.record_action_end(event.time_fired, entity_id, action_id)
 
                 self._set_action_completed(action_id)
 

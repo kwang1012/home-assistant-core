@@ -277,7 +277,7 @@ class BaseRescheduler(TimeLineScheduler):
             free_slots.insert_after(slot_st, action_end, slot_end)
             free_slots.updateitem(slot_st, action_st)
 
-        #LOGGER.info("%s free slots: %s", entity_id or "", free_slots)
+        # LOGGER.info("%s free slots: %s", entity_id or "", free_slots)
 
         return free_slots
 
@@ -289,7 +289,8 @@ class BaseRescheduler(TimeLineScheduler):
         st_time: datetime,
         metrics: ScheduleMetrics,
         window: timedelta = timedelta(0),
-        rescheduled_action: tuple[ActionInfo, str, datetime, datetime] | None = None, # pass the rescheduled action
+        rescheduled_action: tuple[ActionInfo, str, datetime, datetime]
+        | None = None,  # pass the rescheduled action
     ) -> LineageTable:
         """Reschedule actions using the RV resource reclamation algorithm.
 
@@ -335,7 +336,6 @@ class BaseRescheduler(TimeLineScheduler):
             # LOGGER.info("%s: Free slots status before return: %s", entity_id, [f"{datetime_to_string(st)}-{datetime_to_string(et)}" for st, et in free_slots[entity_id].items()])
 
             # add the action's old time range to all the affected entities' free slots
-            is_first = True
             for action_id, action_lock in lock_queue.items():
                 # skip the action if it is already running before st_time
                 if self._is_action_running(action_lock.action_id, st_time):
@@ -383,7 +383,7 @@ class BaseRescheduler(TimeLineScheduler):
         # LOGGER.info("Trying to move %s", [action_info.action_id for action_info in next_action_heap])
         visited = set[str]()
         while next_action_heap:
-            #LOGGER.debug(rv_metrics)
+            # LOGGER.debug(rv_metrics)
             action_lock = heapq.heappop(next_action_heap)
             action = action_lock.action
             action_id = action.action_id
@@ -414,7 +414,7 @@ class BaseRescheduler(TimeLineScheduler):
 
             # if the action has no parents and no previous actions, it can start at st_time
             # which is the point on the schedule the rescheduler started with
-            #action_st = max(datetime.now(), st_time)
+            # action_st = max(datetime.now(), st_time)
 
             # Group action should have the same start time
             if action_id == rescheduled_action_info.action_id:
@@ -1352,7 +1352,7 @@ class BaseRescheduler(TimeLineScheduler):
             lineage_table.free_slots,
             lineage_table.lock_queues,
         )
-        #self._scheduler.lineage_table = lineage_table.duplicate
+        # self._scheduler.lineage_table = lineage_table.duplicate
         del descheduled_actions[chosen_action.action_id]
 
         if serializability_guarantee:
@@ -1477,8 +1477,14 @@ class BaseRescheduler(TimeLineScheduler):
                 best_lt = lt
                 best_so = so
 
-        LOGGER.debug("[optimal helper] scheduler lock queue: %s", self._scheduler.lineage_table.lock_queues[entity_id])
-        LOGGER.debug("[optimal helper] rescheduler lock queue: %s", self._lineage_table.lock_queues[entity_id])
+        LOGGER.debug(
+            "[optimal helper] scheduler lock queue: %s",
+            self._scheduler.lineage_table.lock_queues[entity_id],
+        )
+        LOGGER.debug(
+            "[optimal helper] rescheduler lock queue: %s",
+            self._lineage_table.lock_queues[entity_id],
+        )
         return best_lt, best_so, best_metric
 
     def optimal(
@@ -1528,10 +1534,9 @@ class BaseRescheduler(TimeLineScheduler):
                         continue
                     next_slots[entity_id] = last_slot_start
 
-
                 self._return_free_slot(entity_id, action.action_id)
                 self._lineage_table.lock_queues[entity_id].pop(action.action_id)
-                #self._scheduler.lineage_table.lock_queues[entity_id].pop(action.action_id)
+                # self._scheduler.lineage_table.lock_queues[entity_id].pop(action.action_id)
 
                 wait_queues[entity_id].add(action)
 
@@ -1555,7 +1560,7 @@ class BaseRescheduler(TimeLineScheduler):
         best_lt = None
         best_so = None
         # find the action with the shortest duration
-        #LOGGER.debug("wait queues: %s", wait_queues)
+        # LOGGER.debug("wait queues: %s", wait_queues)
         for chosen_action in wait_queues[next_entity_id]:
             lt, so, new_metrics = self._optimal_helper(
                 self._lineage_table,
@@ -1594,8 +1599,14 @@ class BaseRescheduler(TimeLineScheduler):
         best_metric.set_rescheduling_policy(rescheduling_policy)
         best_metric.save_metrics()
 
-        LOGGER.debug("[optimal] scheduler lock queue: %s", self._scheduler.lineage_table.lock_queues[entity_id])
-        LOGGER.debug("[optimal] rescheduler lock queue: %s", self._lineage_table.lock_queues[entity_id])
+        LOGGER.debug(
+            "[optimal] scheduler lock queue: %s",
+            self._scheduler.lineage_table.lock_queues[entity_id],
+        )
+        LOGGER.debug(
+            "[optimal] rescheduler lock queue: %s",
+            self._lineage_table.lock_queues[entity_id],
+        )
 
         return best_lt, best_so
 
@@ -2726,7 +2737,7 @@ class RascalRescheduler:
         st_time, old_end_time = action_lock.time_range
         new_end_time = old_end_time + diff
         metrics = ScheduleMetrics(sm=self._scheduler.metrics)
-        #LOGGER.debug('metrics: %s', metrics)
+        # LOGGER.debug('metrics: %s', metrics)
         if st_time > new_end_time:
             LOGGER.error(
                 "%s's new end time is before the start time. %s %s",
@@ -2866,7 +2877,7 @@ class RascalRescheduler:
                 set(affected_actions.keys())
             )
 
-            #LOGGER.info(f"{affected_actions=}")
+            # LOGGER.info(f"{affected_actions=}")
 
             if serializability and immutable_serialization_order:
                 descheduled_actions = (
@@ -2916,7 +2927,6 @@ class RascalRescheduler:
                     metrics,
                 )
 
-
         LOGGER.info("============= Reschedule ends =============")
         if not new_lt:
             # self._apply_schedule(self._rescheduler.lineage_table.free_slots, old_so)
@@ -2931,8 +2941,14 @@ class RascalRescheduler:
 
         self._apply_schedule(new_lt, new_so)
 
-        LOGGER.debug("[reschedule] scheduler lock queue: %s", self._scheduler.lineage_table.lock_queues[entity_id])
-        LOGGER.debug("[reschedule] rescheduler lock queue: %s", self._rescheduler.lineage_table.lock_queues[entity_id])
+        LOGGER.debug(
+            "[reschedule] scheduler lock queue: %s",
+            self._scheduler.lineage_table.lock_queues[entity_id],
+        )
+        LOGGER.debug(
+            "[reschedule] rescheduler lock queue: %s",
+            self._rescheduler.lineage_table.lock_queues[entity_id],
+        )
 
         end_time = t.time()
         self._hass.bus.async_fire(
@@ -2947,8 +2963,14 @@ class RascalRescheduler:
     ) -> None:
         """Apply the new schedule."""
 
-        LOGGER.debug("new schedule lock queue: %s", schedule.lock_queues['light.first_floor_lights'])
-        LOGGER.debug("old lock queue: %s", self._scheduler.lineage_table.lock_queues['light.first_floor_lights'])
+        LOGGER.debug(
+            "new schedule lock queue: %s",
+            schedule.lock_queues["light.first_floor_lights"],
+        )
+        LOGGER.debug(
+            "old lock queue: %s",
+            self._scheduler.lineage_table.lock_queues["light.first_floor_lights"],
+        )
 
         LOGGER.info("Start applying the new schedule")
         for entity_id in schedule.lock_queues:
@@ -3222,8 +3244,14 @@ class RascalRescheduler:
             LOGGER.error(
                 "Action %s is not scheduled on entity %s", action_id, entity_id
             )
-        LOGGER.debug("[action length diff] scheduler lock queue: %s", self._scheduler.lineage_table.lock_queues[entity_id])
-        LOGGER.debug("[action length diff] rescheduler lock queue: %s", self._rescheduler.lineage_table.lock_queues[entity_id])
+        LOGGER.debug(
+            "[action length diff] scheduler lock queue: %s",
+            self._scheduler.lineage_table.lock_queues[entity_id],
+        )
+        LOGGER.debug(
+            "[action length diff] rescheduler lock queue: %s",
+            self._rescheduler.lineage_table.lock_queues[entity_id],
+        )
         action_lock = self._scheduler.lineage_table.lock_queues[entity_id][action_id]
         if not action_lock:
             raise ValueError(
