@@ -1,0 +1,4209 @@
+"""Support for rasc."""
+
+import asyncio
+from collections.abc import Callable, Coroutine, Sequence
+import copy
+from datetime import UTC, datetime, timedelta
+from functools import cmp_to_key
+import json
+import logging
+import os
+import time
+from typing import TYPE_CHECKING, Any
+
+from homeassistant.const import (
+    ATTR_ACTION_ID,
+    ATTR_ENTITY_ID,
+    CONF_ACTION_START_METHOD,
+    CONF_CHOOSE,
+    CONF_CONDITION,
+    CONF_DELAY,
+    CONF_DEPEND_ON,
+    CONF_DEVICE_ID,
+    CONF_ENTITY_ID,
+    CONF_PARALLEL,
+    CONF_RECORD_RESULTS,
+    CONF_RESCHEDULING_POLICY,
+    CONF_SCHEDULING_POLICY,
+    CONF_SEQUENCE,
+    CONF_SERVICE,
+    CONF_SERVICE_DATA,
+    CONF_TARGET,
+    CONF_TYPE,
+    DOMAIN_SCRIPT,
+    FCFS,
+    FCFS_POST,
+    JIT,
+    LOCK_STATE_ACQUIRED,
+    LOCK_STATE_LEASED,
+    LOCK_STATE_RELEASED,
+    LOCK_STATE_SCHEDULED,
+    RASC_ACK,
+    RASC_COMPLETE,
+    RASC_INCOMPLETE,
+    RASC_REQUESTED,
+    RASC_RESPONSE,
+    RASC_SCHEDULED,
+    RASC_START,
+    SCHEDULE_START,
+    START_EVENT_BASED,
+    START_TIME_BASED,
+    TIMELINE,
+)
+from homeassistant.core import Event, HomeAssistant
+
+if TYPE_CHECKING:
+    from homeassistant.components.script import BaseScriptEntity
+    from homeassistant.helpers.entity_component import EntityComponent
+
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.entity_registry import async_entries_for_device
+from homeassistant.helpers.rascalscheduler import (
+    datetime_to_string,
+    generate_duration,
+    get_routine_id,
+    time_range_to_string,
+)
+from homeassistant.helpers.typing import ConfigType
+
+from .abstraction import RASCAbstraction
+from .const import CONF_TRANSITION, DOMAIN  # , MAX_SCHEDULE_TIME
+from .entity import (
+    ActionEntity,
+    BaseRoutineEntity,
+    Queue,
+    RoutineEntity,
+    get_entity_id_from_number,
+)
+from .log import set_logger
+from .metrics import ScheduleMetrics
+
+CONF_ROUTINE_ID = "routine_id"
+CONF_ROUTINE_LOCK_STATUS = "routine_lock_status"
+CONF_STEP = "step"
+CONF_END_VIRTUAL_NODE = "end_virtual_node"
+
+TIMEOUT = 3000  # millisecond
+
+_LOGGER = set_logger()
+_LOGGER.setLevel(logging.INFO)
+
+
+def create_routine(
+    hass: HomeAssistant,
+    name: str | None,
+    routine_id: str,
+    action_script: Sequence[dict[str, Any]],
+) -> BaseRoutineEntity:
+    """Create a routine based on the given action script."""
+    rasc: RASCAbstraction | None = hass.data[DOMAIN]
+    if not rasc:
+        raise ValueError("RASC is not initialized.")
+    next_parents = list[ActionEntity]()
+    entities: dict[str, ActionEntity] = {}
+    config: dict[str, Any] = {}
+
+    # confige action id for each node
+    config[CONF_STEP] = -1
+    config[CONF_ROUTINE_ID] = routine_id
+
+    for _, script in enumerate(action_script):
+        if (
+            CONF_PARALLEL not in script
+            and CONF_SEQUENCE not in script
+            and CONF_SERVICE not in script
+            and CONF_CONDITION not in script
+            and CONF_CHOOSE not in script
+            and CONF_DELAY not in script
+        ):
+            config[CONF_STEP] = config[CONF_STEP] + 1
+            action_id = f"{config[CONF_ROUTINE_ID]}.{config[CONF_STEP]}"
+            action: str = script[CONF_TYPE]
+            action_wo_platform = action.split(".")[1]
+            if CONF_TRANSITION in script:
+                transition: float | None = script[CONF_TRANSITION]
+                # _LOGGER.debug(
+                #     "The transition of action %s is %f", action_id, transition
+                # )
+            else:
+                transition = None
+            target_entities = get_target_entities(hass, script)
+            estimated_rts = dict[str, timedelta]()
+            estimated_stc = dict[str, timedelta]()
+            for target_entity in target_entities:
+                entity_id = get_entity_id_from_number(hass, target_entity)
+                estimated_rts_sec = rasc.get_action_length_estimate(
+                    entity_id,
+                    action=action_wo_platform,
+                    transition=transition,
+                    part="rts",
+                )
+                estimated_stc_sec = rasc.get_action_length_estimate(
+                    entity_id,
+                    action=action_wo_platform,
+                    transition=transition,
+                    part="stc",
+                )
+                estimated_rts[entity_id] = generate_duration(estimated_rts_sec)
+                estimated_stc[entity_id] = generate_duration(estimated_stc_sec)
+
+            entities[action_id] = ActionEntity(
+                hass=hass,
+                action=script,
+                action_id=action_id,
+                rts=estimated_rts,
+                stc=estimated_stc,
+                logger=_LOGGER,
+            )
+
+            dependency_types: list[str] | None = None
+            if CONF_DEPEND_ON in script:
+                dependency_types_script = script[CONF_DEPEND_ON]
+                if isinstance(dependency_types_script, str):
+                    dependency_types = [dependency_types_script]
+                elif isinstance(dependency_types_script, list):
+                    dependency_types = dependency_types_script
+                else:
+                    raise ValueError(
+                        f"Invalid dependency types {dependency_types_script}"
+                    )
+            else:
+                dependency_types = [RASC_COMPLETE]
+
+            if next_parents:
+                if not dependency_types:
+                    raise ValueError(
+                        f"Dependency types are not defined for action {action_id}"
+                    )
+                if len(dependency_types) != len(next_parents):
+                    if len(dependency_types) != 1:
+                        raise ValueError(
+                            f"Dependency types {dependency_types} do not match the number of parents {len(next_parents)}"
+                        )
+                    dependency_types = dependency_types * len(next_parents)
+
+                for parent, dependency in zip(
+                    next_parents, dependency_types, strict=False
+                ):
+                    if dependency not in entities[action_id].parents:
+                        entities[action_id].parents[dependency] = set()
+                    entities[action_id].parents[dependency].add(parent)
+                    if dependency not in parent.children:
+                        parent.children[dependency] = set()
+                    parent.children[dependency].add(entities[action_id])
+
+            next_parents.clear()
+            next_parents.append(entities[action_id])
+
+        else:
+            leaf_nodes = _create_routine(hass, script, config, next_parents, entities)
+            next_parents.clear()
+            next_parents = leaf_nodes
+
+    # add virtual node to the end of the routine
+    # the use of the virtual node is to identify if all actions in the routine are completed
+    entities[CONF_END_VIRTUAL_NODE] = ActionEntity(
+        hass=hass,
+        action={},
+        action_id="",
+        rts={},
+        stc={},
+        is_end_node=True,
+        logger=_LOGGER,
+    )
+
+    for parent in next_parents:
+        if RASC_COMPLETE not in parent.children:
+            parent.children[RASC_COMPLETE] = set()
+        parent.children[RASC_COMPLETE].add(entities[CONF_END_VIRTUAL_NODE])
+        if RASC_COMPLETE not in entities[CONF_END_VIRTUAL_NODE].parents:
+            entities[CONF_END_VIRTUAL_NODE].parents[RASC_COMPLETE] = set()
+        entities[CONF_END_VIRTUAL_NODE].parents[RASC_COMPLETE].add(parent)
+
+    return BaseRoutineEntity(name, routine_id, entities, action_script)
+
+
+def _create_routine(  # noqa: C901
+    hass: HomeAssistant,
+    script: dict[str, Any],
+    config: dict[str, Any],
+    parents: list[ActionEntity],
+    entities: dict[str, ActionEntity],
+) -> list[ActionEntity]:
+    """Create a routine based on the given action script."""
+    rasc: RASCAbstraction | None = hass.data[DOMAIN]
+    if not rasc:
+        raise ValueError("RASC is not initialized.")
+
+    next_parents: list[ActionEntity] = []
+    if CONF_PARALLEL in script:
+        for item in list(script.values())[0]:
+            leaf_entities = _create_routine(hass, item, config, parents, entities)
+            next_parents.extend(leaf_entities)
+
+    elif CONF_SEQUENCE in script:
+        next_parents = parents
+        for item in list(script.values())[0]:
+            leaf_entities = _create_routine(hass, item, config, next_parents, entities)
+            next_parents = leaf_entities
+
+    elif CONF_SERVICE in script:
+        domain: str = script[CONF_SERVICE].split(".")[0]
+        if domain == DOMAIN_SCRIPT:
+            script_component: EntityComponent[BaseScriptEntity] = hass.data[
+                DOMAIN_SCRIPT
+            ]
+
+            if script_component:
+                base_script = script_component.get_entity(list(script.values())[0])
+                if base_script and base_script.raw_config:
+                    next_parents = parents
+                    for item in base_script.raw_config[CONF_SEQUENCE]:
+                        leaf_entities = _create_routine(
+                            hass, item, config, next_parents, entities
+                        )
+                        next_parents = leaf_entities
+        else:
+            config[CONF_STEP] = config[CONF_STEP] + 1
+            action_id = f"{config[CONF_ROUTINE_ID]}.{config[CONF_STEP]}"
+            action: str = script[CONF_SERVICE]
+            action_wo_platform = action.split(".")[1]
+            if (
+                CONF_SERVICE_DATA in script
+                and CONF_TRANSITION in script[CONF_SERVICE_DATA]
+            ):
+                transition: float | None = script[CONF_SERVICE_DATA][CONF_TRANSITION]
+                # _LOGGER.debug(
+                #     "The transition of action %s is %f", action_id, transition
+                # )
+            else:
+                transition = None
+            target_entities = get_target_entities(hass, script)
+            estimated_rts = dict[str, timedelta]()
+            estimated_stc = dict[str, timedelta]()
+            for target_entity in target_entities:
+                entity_id = get_entity_id_from_number(hass, target_entity)
+                estimated_rts_sec = rasc.get_action_length_estimate(
+                    entity_id,
+                    action=action_wo_platform,
+                    transition=transition,
+                    part="rts",
+                )
+                estimated_stc_sec = rasc.get_action_length_estimate(
+                    entity_id,
+                    action=action_wo_platform,
+                    transition=transition,
+                    part="stc",
+                )
+                estimated_rts[entity_id] = generate_duration(estimated_rts_sec)
+                estimated_stc[entity_id] = generate_duration(estimated_stc_sec)
+
+            entities[action_id] = ActionEntity(
+                hass=hass,
+                action=script,
+                action_id=action_id,
+                rts=estimated_rts,
+                stc=estimated_stc,
+                logger=_LOGGER,
+            )
+
+            dependency_types: list[str] | None = None
+            if CONF_DEPEND_ON in script:
+                dependency_types_script = script[CONF_DEPEND_ON]
+                if isinstance(dependency_types_script, str):
+                    dependency_types = [dependency_types_script]
+                elif isinstance(dependency_types_script, list):
+                    dependency_types = dependency_types_script
+                else:
+                    raise ValueError(
+                        f"Invalid dependency types {dependency_types_script}"
+                    )
+            else:
+                dependency_types = [RASC_COMPLETE]
+
+            if parents:
+                if not dependency_types:
+                    raise ValueError(
+                        f"Dependency types are not defined for action {action_id}"
+                    )
+                if len(dependency_types) != len(parents):
+                    if len(dependency_types) != 1:
+                        raise ValueError(
+                            f"Dependency types {dependency_types} do not match the number of parents {len(parents)}"
+                        )
+                    dependency_types = dependency_types * len(parents)
+
+                for parent, dependency in zip(parents, dependency_types, strict=False):
+                    if dependency not in entities[action_id].parents:
+                        entities[action_id].parents[dependency] = set()
+                    entities[action_id].parents[dependency].add(parent)
+                    if dependency not in parent.children:
+                        parent.children[dependency] = set()
+                    parent.children[dependency].add(entities[action_id])
+
+            next_parents.append(entities[action_id])
+
+    elif CONF_CONDITION in script or CONF_CHOOSE in script:
+        next_parents = parents
+
+    elif CONF_DELAY in script:
+        delta = timedelta(**script[CONF_DELAY])
+
+        for parent in parents:
+            parent.delay = delta
+
+        next_parents = parents
+
+    else:
+        config[CONF_STEP] = config[CONF_STEP] + 1
+        action_id = f"{config[CONF_ROUTINE_ID]}.{config[CONF_STEP]}"
+        action = script[CONF_TYPE]
+        action_wo_platform = action.split(".")[1]
+        transition = script.get(CONF_TRANSITION)
+        target_entities = get_target_entities(hass, script)
+        estimated_rts = dict[str, timedelta]()
+        estimated_stc = dict[str, timedelta]()
+        for target_entity in target_entities:
+            entity_id = get_entity_id_from_number(hass, target_entity)
+            estimated_rts_sec = rasc.get_action_length_estimate(
+                entity_id, action=action_wo_platform, transition=transition, part="rts"
+            )
+            estimated_stc_sec = rasc.get_action_length_estimate(
+                entity_id, action=action_wo_platform, transition=transition, part="stc"
+            )
+            estimated_rts[entity_id] = generate_duration(estimated_rts_sec)
+            estimated_stc[entity_id] = generate_duration(estimated_stc_sec)
+
+        entities[action_id] = ActionEntity(
+            hass=hass,
+            action=script,
+            action_id=action_id,
+            rts=estimated_rts,
+            stc=estimated_stc,
+            logger=_LOGGER,
+        )
+
+        dependency_types = None
+        if CONF_DEPEND_ON in script:
+            dependency_types_script = script[CONF_DEPEND_ON]
+            if isinstance(dependency_types_script, str):
+                dependency_types = [dependency_types_script]
+            elif isinstance(dependency_types_script, list):
+                dependency_types = dependency_types_script
+            else:
+                raise ValueError(f"Invalid dependency types {dependency_types_script}")
+        else:
+            dependency_types = [RASC_COMPLETE]
+
+        if parents:
+            if not dependency_types:
+                raise ValueError(
+                    f"Dependency types are not defined for action {action_id}"
+                )
+            if len(dependency_types) != len(parents):
+                if len(dependency_types) != 1:
+                    raise ValueError(
+                        f"Dependency types {dependency_types} do not match the number of parents {len(parents)}"
+                    )
+                dependency_types = dependency_types * len(parents)
+
+            for parent, dependency in zip(parents, dependency_types, strict=False):
+                if dependency not in entities[action_id].parents:
+                    entities[action_id].parents[dependency] = set()
+                entities[action_id].parents[dependency].add(parent)
+                if dependency not in parent.children:
+                    parent.children[dependency] = set()
+                parent.children[dependency].add(entities[action_id])
+
+        next_parents.append(entities[action_id])
+
+    return next_parents
+
+
+def get_target_entities(hass: HomeAssistant, script: dict[str, Any]) -> list[str]:
+    """Get all the entities from the given script."""
+    target_entities: list[str] = []
+
+    if CONF_SERVICE in script:
+        if CONF_DEVICE_ID in script[CONF_TARGET]:
+            device_ids = []
+            if isinstance(script[CONF_TARGET][CONF_DEVICE_ID], str):
+                device_ids = [script[CONF_TARGET][CONF_DEVICE_ID]]
+            else:
+                device_ids = script[CONF_TARGET][CONF_DEVICE_ID]
+            entity_registry = er.async_get(hass)
+            target_entities += [
+                get_entity_id_from_number(hass, entry.entity_id)
+                for device_id in device_ids
+                for entry in async_entries_for_device(entity_registry, device_id)
+            ]
+
+        if CONF_ENTITY_ID in script[CONF_TARGET]:
+            if isinstance(script[CONF_TARGET][CONF_ENTITY_ID], str):
+                target_entities += [
+                    get_entity_id_from_number(hass, script[CONF_TARGET][CONF_ENTITY_ID])
+                ]
+            else:
+                target_entities += [
+                    get_entity_id_from_number(hass, entity)
+                    for entity in script[CONF_TARGET][CONF_ENTITY_ID]
+                ]
+    else:
+        try:
+            target_entities = [get_entity_id_from_number(hass, script[CONF_ENTITY_ID])]
+        except Exception as _:  # pylint: disable=broad-except  # noqa: BLE001
+            _LOGGER.error("%s not found in the script: %s", CONF_ENTITY_ID, script)
+
+    return target_entities
+
+
+def get_routine_targets(hass: HomeAssistant, routine: RoutineEntity) -> set[str]:
+    """Get all the entities from the given routine."""
+    target_entities = set[str]()
+    # _LOGGER.debug("Getting routine %s's targets", routine.routine_id)
+    for action in routine.actions.values():
+        if action.is_end_node:
+            continue
+        target_entities.update(get_target_entities(hass, action.action))
+    return target_entities
+
+
+def output_lock_queues(
+    lock_queues: dict[str, Queue[str, ActionInfo]], filepath: str | None = None
+) -> None:
+    """Output the lock queues."""
+    if filepath:
+        fp = os.path.join(filepath, "locks_queues.json")
+    lock_queues_list = []
+    for entity_id, actions in lock_queues.items():
+        action_list = []
+        for action_id, action_info in actions.items():
+            if action_info:
+                sub_entity_json = {
+                    "action_id": action_id,
+                    "action_state": action_info.action_state,
+                    "lock_state": action_info.lock_state,
+                    "start_time": datetime_to_string(action_info.start_time),
+                    "end_time": datetime_to_string(action_info.end_time),
+                }
+                action_list.append(sub_entity_json)
+
+        entity_json = {"entity_id": entity_id, "actions": action_list}
+
+        lock_queues_list.append(entity_json)
+
+    out = {"Type": "Lock Queues", "Lock Queues": lock_queues_list}
+    if filepath:
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=2)
+    else:
+        _LOGGER.debug(json.dumps(out, indent=2))
+
+
+def output_locks(locks: dict[str, str | None], filepath: str) -> None:
+    """Output the locks."""
+    fp = os.path.join(filepath, "locks.json")
+
+    locks_list = []
+    for entity_id, routine_id in locks.items():
+        entity_json = {"entity_id": entity_id, "routine_id": routine_id}
+        locks_list.append(entity_json)
+
+    out = {"Type": "Locks", "Locks": locks_list}
+    with open(fp, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2)
+
+
+def output_wait_queues(wait_queue: Queue[str, WaitRoutineInfo], filepath: str) -> None:
+    """Output wait queues."""
+    fp = os.path.join(filepath, "wait_queue.json")
+    routines = list(wait_queue)
+    out = {"Type": "Wait Queue", "Wait Queue": routines}
+    with open(fp, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2)
+
+
+def output_lock_waitlist(lock_waitlist: dict[str, list[str]], filepath: str) -> None:
+    """Output lock waitlist."""
+    fp = os.path.join(filepath, "lock_waitlist.json")
+
+    waitlist = []
+    for entity_id, routines in lock_waitlist.items():
+        entity_json = {"entity_id": entity_id, "waitlist": list(routines)}
+
+        waitlist.append(entity_json)
+
+    out = {"Type": "Lock Waitlist", "Routines": waitlist}
+    with open(fp, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2)
+
+
+def output_serialization_order(
+    serialization_order: Queue[str, RoutineInfo], filepath: str | None = None
+) -> None:
+    """Output serialization order."""
+    if filepath:
+        fp = os.path.join(filepath, "serialization_order.json")
+    routines = list(serialization_order)
+    out = {"Type": "Serialization Order", "Serialization Order": routines}
+    if filepath:
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=2)
+    else:
+        _LOGGER.debug(json.dumps(out, indent=2))
+
+
+def output_free_slots(
+    timelines: dict[str, Queue[datetime, datetime]], filepath: str | None = None
+) -> None:
+    """Output free slots."""
+    if filepath:
+        fp = os.path.join(filepath, "free_slots.json")
+
+    tl = []
+    for entity_id, timeline in timelines.items():
+        slot_list: list[dict[str, str | None]] = []
+        for st, end in timeline.items():
+            st_str = datetime_to_string(st)
+            end_str = datetime_to_string(end) if end else None
+            sub_entity_json: dict[str, str | None] = {"st": st_str, "end": end_str}
+
+            slot_list.append(sub_entity_json)
+
+        entity_json = {"entity_id": entity_id, "timeline": slot_list}
+
+        tl.append(entity_json)
+
+    out = {"Type": "Free Slots", "Free Slots": tl}
+    if filepath:
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=2)
+    else:
+        _LOGGER.debug(json.dumps(out, indent=2))
+
+
+# def output_routine(routine_id: str, actions: dict[str, ActionEntity]) -> None:
+#     """Output routine."""
+#     dirname = f"trail-{TRAIL.num:04d}"
+#     TRAIL.increment()
+
+#     os.path.join(LOG_PATH, dirname, "routines.json")
+
+#     action_list = []
+#     for _, entity in actions.items():
+#         parents = []
+#         children = []
+
+#         for parent in entity.all_parents:
+#             parents.append(parent.action_id)
+
+#         for child in entity.all_children:
+#             children.append(child.action_id)
+
+#         entity_json = {
+#             "action_id": entity.action_id,
+#             "action": entity.action,
+#             "action_completed": entity.action_completed,
+#             "parents": parents,
+#             "children": children,
+#             "delay": str(entity.delay),
+#             "rts": str(entity.rts),
+#             "stc": str(entity.stc),
+#         }
+
+#         action_list.append(entity_json)
+
+#     out = {"Routine_id": routine_id, "Actions": action_list}
+
+
+def output_preset(preset: set[str], filepath: str) -> None:
+    """Output serialization order."""
+    fp = os.path.join(filepath, "preset.json")
+    out = {"Type": "Preset", "Routines": list(preset)}
+    with open(fp, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2)
+
+
+def output_postset(postset: set[str], filepath: str) -> None:
+    """Output serialization order."""
+    fp = os.path.join(filepath, "postset.json")
+    out = {"Type": "Postset", "Routines": list(postset)}
+    with open(fp, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2)
+
+
+def output_all(
+    logger: logging.Logger,
+    locks: dict[str, str | None] | None = None,
+    lock_queues: dict[str, Queue[str, ActionInfo]] | None = None,
+    free_slots: dict[str, Queue[datetime, datetime]] | None = None,
+    serialization_order: Queue[str, RoutineInfo] | None = None,
+    wait_queue: Queue[str, WaitRoutineInfo] | None = None,
+    lock_waitlist: dict[str, list[str]] | None = None,
+    preset: set[str] | None = None,
+    postset: set[str] | None = None,
+    conflict=False,
+):
+    """Output specific info."""
+    return
+
+
+#     if conflict:
+#         dirname = f"conflict-{TRAIL.num:04d}"
+#     else:
+#         dirname = f"trail-{TRAIL.num:04d}"
+#         TRAIL.increment()
+
+#     fp = os.path.join(LOG_PATH, dirname)
+#     logger.debug("Output logs to %s.", fp)
+
+#     if not os.path.isdir(fp):
+#         os.mkdir(fp)
+
+#     if locks:
+#         output_locks(locks, fp)
+
+#     if lock_queues:
+#         output_lock_queues(lock_queues, fp)
+
+#     if free_slots:
+#         output_free_slots(free_slots, fp)
+
+#     if serialization_order:
+#         output_serialization_order(serialization_order, fp)
+
+#     if wait_queue:
+#         output_wait_queues(wait_queue, fp)
+
+#     if lock_waitlist:
+#         output_lock_waitlist(lock_waitlist, fp)
+
+#     if preset:
+#         output_preset(preset, fp)
+
+#     if postset:
+#         output_postset(postset, fp)
+
+
+class ActionInfo:
+    """A class for storing information about a scheduled action in the lock queues."""
+
+    def __init__(
+        self,
+        action_id: str,
+        action: ActionEntity,
+        action_state: str,
+        lock_state: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
+        """Initialize the action info."""
+        self._action_id = action_id
+        self._action = action
+        self.action_state = action_state
+        self.lock_state = lock_state
+        self._start_time = start_time
+        self._end_time = end_time
+
+    @property
+    def __dict__(self) -> dict:  # type: ignore[override]
+        """Return dict representation."""
+        return {
+            "action_id": self._action_id,
+            "action": vars(self._action),
+            "action_state": self.action_state,
+            "lock_state": self.lock_state,
+            "start_time": datetime_to_string(self._start_time),
+            "end_time": datetime_to_string(self._end_time),
+        }
+
+    @property
+    def action_id(self) -> str:
+        """Get action id."""
+        return self._action_id
+
+    @property
+    def action(self) -> ActionEntity:
+        """Get action."""
+        return self._action
+
+    @property
+    def start_time(self) -> datetime:
+        """Get start time."""
+        return self._start_time
+
+    @start_time.setter
+    def start_time(self, new_start_time):
+        self._start_time = new_start_time
+
+    @property
+    def end_time(self) -> datetime:
+        """Get end time."""
+        return self._end_time
+
+    @end_time.setter
+    def end_time(self, new_end_time):
+        self._end_time = new_end_time
+
+    @property
+    def time_range(self) -> tuple[datetime, datetime]:
+        """Get time range."""
+        return (self._start_time, self._end_time)
+
+    @property
+    def time_range_str(self) -> str:
+        """Get time range."""
+        return f"{datetime_to_string(self._start_time)}-{datetime_to_string(self._end_time)}"
+
+    @property
+    def duration(self) -> timedelta:
+        """Get duration."""
+        return self._end_time - self._start_time
+
+    def duplicate(self) -> ActionInfo:
+        """Get a duplicate of the action info."""
+        return ActionInfo(
+            self._action_id,
+            self._action,
+            self.action_state,
+            self.lock_state,
+            self._start_time,
+            self._end_time,
+        )
+
+    def move_to(
+        self,
+        new_start_time: datetime,
+        new_end_time: datetime | None = None,
+        entity_id=None,
+    ) -> None:
+        """Move to new time range."""
+        if entity_id:
+            _LOGGER.debug(
+                "[Action Info] Move action %s to %s-%s on %s",
+                self.action_id,
+                new_start_time,
+                new_end_time,
+                entity_id,
+            )
+        else:
+            _LOGGER.debug(
+                "[Action Info] Move action %s to %s-%s",
+                self.action_id,
+                new_start_time,
+                new_end_time,
+            )
+        self._start_time = new_start_time
+        self._end_time = new_end_time  # type: ignore[assignment]
+
+    def __lt__(self, other: ActionInfo) -> bool:
+        """Compare two action info."""
+        if self.action.start_requested and not other.action.start_requested:
+            return True
+        if not self.action.start_requested and other.action.start_requested:
+            return False
+        if self._start_time < other.start_time:
+            return True
+        if self._start_time == other.start_time:
+            return self.action_id < other.action_id
+        return False
+
+    def __repr__(self) -> str:
+        """Return the string representation of the action info."""
+        return (
+            f"ActionInfo(action_id={self._action_id}, "
+            f"action_state={self.action_state}, lock_state={self.lock_state}, "
+            f"start_time={self._start_time}, end_time={self._end_time})"
+        )
+
+
+class RoutineInfo:
+    """A class for storing information about a scheduled routine in the serialization order."""
+
+    def __init__(
+        self,
+        routine_id: str,
+        routine: RoutineEntity,
+    ) -> None:
+        """Initialize the routine info."""
+        self._routine_id = routine_id
+        self.routine = routine
+        self.pass_eligibility: bool = False
+
+    @property
+    def routine_id(self) -> str:
+        """Get routine id."""
+        return self._routine_id
+
+    @property
+    def __dict__(self) -> dict:  # type: ignore[override]
+        """Return dict representation."""
+        return {
+            "routine_id": self._routine_id,
+            "routine": vars(self.routine),
+            "pass_eligibility": self.pass_eligibility,
+        }
+
+
+class WaitRoutineInfo:
+    """A class for storing information about a waiting routine in the wait queue."""
+
+    def __init__(
+        self,
+        routine_id: str,
+        routine: RoutineEntity,
+        ttl: int = 4,  # to avoid starvation
+    ) -> None:
+        """Initialize the wait routine info."""
+        self._routine_id = routine_id
+        self.routine = routine
+        self.ttl = ttl
+
+    @property
+    def routine_id(self) -> str:
+        """Get routine id."""
+        return self._routine_id
+
+    @property
+    def __dict__(self) -> dict:  # type: ignore[override]
+        """Return dict representation."""
+        return {
+            "routine_id": self._routine_id,
+            "routine": vars(self.routine),
+            "ttl": self.ttl,
+        }
+
+
+class LineageTable:
+    """Maintains a per-device lineage: the planned transition order of that device's lock.
+
+    locks: the state of the device's lock.
+    lock_queues: transition order of the device's lock.
+    free slots: a list of available time slots in chronological order.
+
+    """
+
+    def __init__(self) -> None:
+        """Initialize linage table entity."""
+
+        # locks: key is the entity_id and value is the routine id that is holding the
+        # lock now, if any routine is
+        self._locks: dict[str, str | None] = {}
+
+        # lock_queues: key is the entity_id and each element stored in the queue is the
+        # (action id, action lock info) tuple that is holding or waiting for the lock
+        self._lock_queues: dict[str, Queue[str, ActionInfo]] = {}
+
+        # free_slots: key is the entity_id and each element stored in the queue is a
+        # slot where the start time is the key and the end time is the value
+        self._free_slots: dict[str, Queue[datetime, datetime]] = {}
+
+        self.last_removed_time: None | datetime = None
+
+    @property
+    def __dict__(self) -> dict:  # type: ignore[override]
+        """Return a dict representation of the lineage table."""
+        return {
+            "locks": self._locks,
+            "lock_queues": {
+                entity_id: {
+                    action_id: vars(action_lock)
+                    for action_id, action_lock in lock_queue.items()
+                }
+                for entity_id, lock_queue in self._lock_queues.items()
+            },
+            "free_slots": {
+                entity_id: {
+                    datetime_to_string(start): datetime_to_string(end)
+                    for start, end in timeline.items()
+                }
+                for entity_id, timeline in self._free_slots.items()
+            },
+        }
+
+    @property
+    def locks(self) -> dict[str, str | None]:
+        """Get locks."""
+        return self._locks
+
+    @locks.setter
+    def locks(self, new_locks: dict[str, str | None]) -> None:
+        """Set locks."""
+        self._locks = new_locks
+
+    @property
+    def lock_queues(self) -> dict[str, Queue[str, ActionInfo]]:
+        """Get lock queues."""
+        return self._lock_queues
+
+    @lock_queues.setter
+    def lock_queues(self, new_lock_queues: dict[str, Queue]) -> None:
+        """Set lock queues."""
+        self._lock_queues = new_lock_queues
+
+    @property
+    def free_slots(self) -> dict[str, Queue[datetime, datetime]]:
+        """Get free slots."""
+        return self._free_slots
+
+    @property
+    def consistent_free_slots(self) -> dict[str, Queue[datetime, datetime]]:
+        """Get free slots consistent to lock queue."""
+        current_time = self.last_removed_time or datetime.now(UTC)
+        free_slots = {}
+        for entity_id, lock_queue in self._lock_queues.items():
+            free_slots[entity_id] = Queue[datetime, datetime]()
+            if not lock_queue:
+                free_slots[entity_id][current_time] = None
+                continue
+            start = current_time
+            end = None
+            for action_lock in lock_queue.values():
+                if action_lock:
+                    end = action_lock.start_time
+                    if start < end:
+                        free_slots[entity_id][start] = end
+                    start = action_lock.end_time
+            free_slots[entity_id][start] = None
+        return free_slots
+
+    @free_slots.setter  # type: ignore[attr-defined, no-redef]
+    def free_slots(self, fs: dict[str, Queue[datetime, datetime]]) -> None:
+        """Set free slots."""
+        self._free_slots = fs
+
+    def visualize(self, granularity=timedelta(seconds=0.5)) -> str:
+        """Visualize the lock queues in a table format."""
+        # print("Visualized Lineage Table:")
+        # Find global time bounds
+        filtered_lock_queues = {
+            eid: lq for eid, lq in self._lock_queues.items() if len(lq) > 0
+        }
+        min_time = min(
+            action_info.start_time.astimezone(UTC)  # type: ignore[union-attr]
+            for queue in filtered_lock_queues.values()
+            for action_info in queue.values()
+        )
+        max_time = max(
+            action_info.end_time.astimezone(UTC)  # type: ignore[union-attr]
+            for queue in filtered_lock_queues.values()
+            for action_info in queue.values()
+        )
+        now_utc = datetime.now(UTC)
+        now_slot = int((now_utc - min_time) / granularity)
+        timetable_str = f"Time range: {min_time} to {max_time}, now slot: {now_slot}\n"
+
+        slot_width = 7  # characters per time slot
+        slots_per_line = 30  # number of time slots per line
+        line_title_width = 30  # characters for the entity id column
+        # total_slots = int(
+        #     (max_time - min_time) / granularity) + 1
+        # time_labels = [
+        #     min_time + i * granularity for i in range(total_slots)]
+        # header = "Time:     " + \
+        #     " ".join(t.strftime("%H:%M:%S") for t in time_labels)
+        # print(header)
+
+        # Prepare lines per limited time slots to avoid overly long lines
+        lines = [
+            {
+                key: [" " * slot_width for _ in range(slots_per_line)]
+                for key in filtered_lock_queues
+            }
+        ]
+        for entity_id, lock_queue in filtered_lock_queues.items():
+            action_info = next(iter(lock_queue.values()))
+            for action_id, action_info in lock_queue.items():
+                action_print_id = (
+                    f"{get_routine_id(action_id)[-5:]}.{action_id.split('.')[-1]}"
+                )
+                start_idx_overall = int(
+                    (action_info.start_time.astimezone(UTC) - min_time) / granularity  # type: ignore[union-attr]
+                )
+                end_idx_overall = int(
+                    (action_info.end_time.astimezone(UTC) - min_time) / granularity  # type: ignore[union-attr]
+                )
+                line_no = start_idx_overall // slots_per_line
+                if line_no >= len(lines):
+                    # Add new lines as needed
+                    lines.extend(
+                        {
+                            key: [" " * slot_width for _ in range(slots_per_line)]
+                            for key in filtered_lock_queues
+                        }
+                        for _ in range(len(lines), line_no + 1)
+                    )
+                start_idx_line = start_idx_overall % slots_per_line
+                end_idx_line = end_idx_overall % slots_per_line
+                if start_idx_line <= end_idx_line:
+                    # Put the action ID at the first slot, fill the rest with dashes
+                    lines[line_no][entity_id][start_idx_line] = f"{action_print_id:<7}"[
+                        :7
+                    ]  # truncate or pad action id
+                    for i in range(start_idx_line + 1, end_idx_line):
+                        lines[line_no][entity_id][i] = "-" * slot_width
+
+        # Render all lines
+        for i, line in enumerate(lines):
+            line_slots = "".join(
+                f"{i * slots_per_line + j:<{slot_width}}" for j in range(slots_per_line)
+            )
+            header = f"{'Slots:':<{line_title_width}}" + line_slots
+            timetable_str += header + "\n"
+            for entity_id, line_content in line.items():
+                timetable_str += (
+                    f"{entity_id:<{line_title_width}}" + "".join(line_content) + "\n"
+                )
+
+        return timetable_str
+
+    def duplicate(self) -> LineageTable:
+        """Get a duplicate of the lineage table."""
+        lt = LineageTable()
+
+        lt.locks = copy.deepcopy(self._locks)
+
+        for entity_id, lock_queue in self._lock_queues.items():
+            lt.lock_queues[entity_id] = Queue[str, ActionInfo](
+                {
+                    action_id: action_lock.duplicate()
+                    for action_id, action_lock in lock_queue.items()
+                    if action_lock
+                }
+            )
+
+        lt.free_slots = copy.deepcopy(self._free_slots)  # type: ignore[misc]
+
+        # _LOGGER.log(logging.DEBUG, "Just duplicated lineage table!")
+        return lt
+
+    def add_entity(self, entity_id: str) -> None:
+        """Add the entity to the lineage table."""
+        self._locks[entity_id] = None
+        self._lock_queues[entity_id] = Queue[str, ActionInfo]()
+        self._free_slots[entity_id] = Queue[datetime, datetime](
+            {datetime.now(UTC): None}
+        )
+
+    def delete_entity(self, entity_id: str) -> None:
+        """Remove the entity with the entity_id from the lineage table."""
+        try:
+            del self._lock_queues[entity_id]
+            del self._locks[entity_id]
+            del self._free_slots[entity_id]
+        except KeyError as e:
+            raise KeyError(f"While deleting entity {entity_id} in lineage table") from e
+
+
+class BaseScheduler:
+    """A class for base scheduler."""
+
+    _real_schedule: dict[str, list[tuple[datetime, datetime]]] = {}
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        lineage_table: LineageTable,
+        serialization_order: Queue[str, RoutineInfo],
+        scheduling_policy: str,
+    ) -> None:
+        """Initialize timeline scheduler."""
+        self._hass = hass
+        self._lineage_table = lineage_table
+        self._serialization_order = serialization_order
+        self._scheduling_policy = scheduling_policy
+
+    def get_real_schedule(self):
+        """Get the real schedule."""
+        return self._real_schedule
+
+    @property
+    def lineage_table(self) -> LineageTable:
+        """Get lineage table."""
+        return self._lineage_table
+
+    @lineage_table.setter
+    def lineage_table(self, lt: LineageTable) -> None:
+        """Set lineage table."""
+        self._lineage_table = lt
+
+    @property
+    def serialization_order(self) -> Queue[str, RoutineInfo]:
+        """Get serialization order."""
+        return self._serialization_order
+
+    @serialization_order.setter
+    def serialization_order(self, serialization_order: Queue[str, RoutineInfo]) -> None:
+        """Set serialization order."""
+        self._serialization_order = serialization_order
+
+    def get_action(self, action_id: str) -> ActionEntity | None:
+        """Get the active action."""
+        routine_id = get_routine_id(action_id)
+        if routine_id not in self._serialization_order:
+            raise ValueError(
+                f"Routine {routine_id} is not scheduled. Action {action_id} cannot be found"
+            )
+        routine_info = self._serialization_order[routine_id]
+
+        if not routine_info:
+            return None
+
+        return routine_info.routine.actions[action_id]
+
+    def get_action_info(self, action_id: str, entity_id: str) -> ActionInfo | None:
+        """Get the active action."""
+        if entity_id not in self._lineage_table.lock_queues:
+            raise ValueError(f"Entity {entity_id} has no schedule.")
+        lock_queue = self.lineage_table.lock_queues[entity_id]
+        if action_id not in lock_queue:
+            raise ValueError(
+                f"Action {action_id} has not been scheduled on entity {entity_id}."
+            )
+        return lock_queue[action_id]
+
+    def filter_ts(
+        self,
+        entity_id: str,
+        now: datetime,
+        free_slots: dict[str, Queue[datetime, datetime]],
+    ) -> Queue[datetime, datetime]:
+        """Filter the time slots of the entity that the end time is not smaller than now."""
+
+        fs: Queue = free_slots[entity_id]
+
+        if not fs:
+            raise ValueError(
+                "There should be at least one time slot in each entity's timeline"
+            )
+
+        filtered_time_slots = Queue[datetime, datetime]()
+        for start_time, end_time in fs.items():
+            if not end_time or end_time > now:
+                filtered_time_slots[start_time] = end_time
+
+        return filtered_time_slots
+
+    def remove_time_slots_before_now(
+        self, now: datetime, free_slots: dict[str, Queue[datetime, datetime]]
+    ) -> None:
+        """Remove all available time slots that have ended before now."""
+        self._lineage_table.last_removed_time = now
+        for entity_id in free_slots:
+            filtered_time_slots = self.filter_ts(entity_id, now, free_slots)
+            start_time, end_time = filtered_time_slots.top()
+
+            if not start_time:
+                continue
+
+            # Check if the start time of the first time slot needs to be updated
+            if now > start_time:
+                filtered_time_slots.insert_after(start_time, now, end_time)
+                filtered_time_slots.pop(start_time)
+
+            free_slots[entity_id] = Queue(filtered_time_slots)
+
+        _LOGGER.debug(
+            "Remove time slots that are smaller than the time %s",
+            now,
+        )
+
+    def get_first_action_with_acquired_lock(self, entity_id: str) -> ActionInfo | None:
+        """Get the first action with the lock."""
+        lock_queue: Queue[str, ActionInfo] = self._lineage_table.lock_queues[entity_id]
+
+        return (
+            next(
+                (
+                    action_info
+                    for action_info in lock_queue.values()
+                    if action_info is not None
+                    and action_info.lock_state == LOCK_STATE_ACQUIRED
+                ),
+                None,
+            )
+            if lock_queue
+            else None
+        )
+
+    def get_last_action_with_acquired_lock(self, entity_id: str) -> ActionInfo | None:
+        """Get the last action with lock."""
+        lock_queue = self._lineage_table.lock_queues[entity_id]
+        return (
+            next(
+                (
+                    action_info
+                    for action_info in reversed(list(lock_queue.values()))
+                    if action_info is not None
+                    and action_info.lock_state == LOCK_STATE_ACQUIRED
+                ),
+                None,
+            )
+            if lock_queue
+            else None
+        )
+
+    def get_available_ts(
+        self,
+        now: datetime,
+        free_slots: dict[str, Queue[datetime, datetime]],
+        entity_id: str,
+        lock_leasing_status: dict[str, str],
+        new_action: ActionEntity,
+    ) -> datetime | None:
+        """Get the start time of the first available time slot for the given the entity."""
+
+        if self._scheduling_policy == FCFS:
+            start_time = self.get_available_ts_by_fcfs(
+                free_slots, now, entity_id, lock_leasing_status, new_action
+            )
+
+        elif self._scheduling_policy == FCFS_POST:
+            start_time = self.get_available_ts_by_fcfs_post(
+                free_slots, now, entity_id, lock_leasing_status, new_action
+            )
+
+        elif self._scheduling_policy == JIT:
+            start_time = self.get_available_ts_by_jit(
+                free_slots, now, entity_id, lock_leasing_status, new_action
+            )
+
+        else:
+            raise ValueError(f"Invalid scheduling policy {self._scheduling_policy}")
+
+        _LOGGER.debug(
+            "The start time of the new time slot for the action %s in the entity %s is %s",
+            new_action.action_id,
+            entity_id,
+            datetime_to_string(start_time) if start_time else None,
+        )
+
+        return start_time
+
+    def get_available_ts_by_fcfs(
+        self,
+        free_slots: dict[str, Queue[datetime, datetime]],
+        now: datetime,
+        entity_id: str,
+        lock_leasing_status: dict[str, str],
+        new_action: ActionEntity,
+    ) -> datetime | None:
+        """Get available time slot by fcfs."""
+        # 1. Check if there is an action accessing the entity
+        return self.get_ts_by_nolease(
+            free_slots, now, entity_id, lock_leasing_status, new_action
+        )
+
+    def get_available_ts_by_fcfs_post(
+        self,
+        free_slots: dict[str, Queue[datetime, datetime]],
+        now: datetime,
+        entity_id: str,
+        lock_leasing_status: dict[str, str],
+        new_action: ActionEntity,
+    ) -> datetime | None:
+        """Get available time slot by fcfs_post."""
+
+        # 1. Check if there is an action accessing the entity
+        start_time = self.get_ts_by_nolease(
+            free_slots, now, entity_id, lock_leasing_status, new_action
+        )
+        if start_time:
+            return start_time
+
+        # 2. Check if there is an action being able to post lease the lock
+        return self.get_ts_by_postlease(
+            free_slots, now, entity_id, lock_leasing_status, new_action
+        )
+
+    def get_available_ts_by_jit(
+        self,
+        free_slots: dict[str, Queue[datetime, datetime]],
+        now: datetime,
+        entity_id: str,
+        lock_leasing_status: dict[str, str],
+        new_action: ActionEntity,
+    ) -> datetime | None:
+        """Get available time slot by jit."""
+
+        # 1. Check if there is an action accessing the entity
+        start_time = self.get_ts_by_nolease(
+            free_slots, now, entity_id, lock_leasing_status, new_action
+        )
+        if start_time:
+            return start_time
+
+        # 2. Check if there is an action being able to pre lease the lock
+        start_time = self.get_ts_by_prelease(
+            free_slots, now, entity_id, lock_leasing_status, new_action
+        )
+        if start_time:
+            return start_time
+
+        # 3. Check if there is an action being able to post lease the lock
+        return self.get_ts_by_postlease(
+            free_slots, now, entity_id, lock_leasing_status, new_action
+        )
+
+    def get_ts_by_nolease(
+        self,
+        free_slots: dict[str, Queue[datetime, datetime]],
+        now: datetime,
+        entity_id: str,
+        lock_leasing_status: dict[str, str],
+        new_action: ActionEntity,
+    ) -> datetime | None:
+        """Get the available time slot for the given entity by checking if the lock is available."""
+        action: ActionInfo | None = self.get_first_action_with_acquired_lock(entity_id)
+        return free_slots[entity_id].end()[0] if not action else None
+
+    def get_ts_by_prelease(
+        self,
+        free_slots: dict[str, Queue[datetime, datetime]],
+        now: datetime,
+        entity_id: str,
+        lock_leasing_status: dict[str, str],
+        new_action: ActionEntity,
+    ) -> datetime | None:
+        """Get the next available time slot for the given entity by checking if the new action can get the lock by pre-lease."""
+        action = self.get_first_action_with_acquired_lock(entity_id)
+
+        if not action:
+            raise ValueError(
+                "Failed to prelease the lock. This shouldn't happen. There is at lease one action acquiring the lock now"
+            )
+
+        # Check if there is an available time slot before the action
+        slot_start = self.find_ts_before_action(action, free_slots[entity_id], now)
+        slot_end = free_slots[entity_id].get(slot_start) if slot_start else None
+
+        if not slot_start or not slot_end:
+            _LOGGER.warning(
+                "Failed to prelease the lock. Cannot find a slot before the action"
+            )
+            return None
+
+        # Check if the slot is big enough to place the action
+        if (slot_end - max(slot_start, now)).total_seconds() < new_action.length(
+            entity_id
+        ).total_seconds():
+            _LOGGER.warning(
+                "Failed to prelease the lock. The slot is too small to place the action"
+            )
+            return None
+
+        # Check if the serializability conflicts if the new action places before the action.
+        if self.conflict_serializability_by_prelease(action, entity_id):
+            _LOGGER.warning(
+                "Failed to prelease the lock. Violate serializability while placing before the action %s",
+                action.action_id,
+            )
+            return None
+
+        # Check if the determined serializability conflicts if the new action places before the action.
+        if self.conflict_determined_serializability(action, "pre", lock_leasing_status):
+            _LOGGER.warning(
+                "Violate determined serializability. Failed to prelease the lock"
+            )
+            return None
+
+        # Check if the action with the acquired key is running
+        if self.action_running(action, entity_id, "pre"):
+            _LOGGER.warning("Failed to prelease the lock. The action is running")
+            return None
+
+        return slot_start
+
+    def find_ts_before_action(
+        self, action: ActionInfo, free_slots: Queue[datetime, datetime], now: datetime
+    ) -> datetime | None:
+        """Get the time slot before the given action."""
+        action_st = action.start_time
+        return next(
+            (st for st, end in free_slots.items() if end == action_st and end > now),
+            None,
+        )
+
+    def get_ts_by_postlease(
+        self,
+        free_slots: dict[str, Queue[datetime, datetime]],
+        now: datetime,
+        entity_id: str,
+        lock_leasing_status: dict[str, str],
+        new_action: ActionEntity,
+    ) -> datetime | None:
+        """Get the time slot after the given action."""
+
+        action: ActionInfo | None = self.get_last_action_with_acquired_lock(entity_id)
+
+        if not action:
+            raise ValueError(
+                "Failed to postlease the lock. This shouldn't happen. There is at lease one action acquiring the lock now"
+            )
+
+        # Check if the serializability would conflict if post-lease
+        if self.conflict_serializability_by_postlease(action, entity_id, new_action):
+            _LOGGER.warning(
+                "Failed to postlease the lock. Violate seriailzability while placing after the action %s",
+                action.action_id,
+            )
+            return None
+
+        # Check if the determined serializability conflicts if the new action places after the action.
+        if self.conflict_determined_serializability(
+            action, "post", lock_leasing_status
+        ):
+            _LOGGER.warning(
+                "Failed to postlease the lock. Violate determined serializability"
+            )
+            return None
+
+        # Check if the action with the acquired key is running
+        if not self.action_running(action, entity_id, "post"):
+            _LOGGER.warning(
+                "The action %s is not running. Failed to postlease the lock",
+                action.action_id,
+            )
+            return None
+
+        # find the available time slot at the end
+        return free_slots[entity_id].end()[0]
+
+    def conflict_serializability_by_prelease(
+        self, action: ActionInfo, entity_id: str
+    ) -> bool:
+        """Check if the serializability conflicts if the new action places before the action."""
+        prev_action = self._lineage_table.lock_queues[entity_id].prev(action.action_id)
+
+        if not prev_action:
+            return False
+
+        if prev_action.lock_state == LOCK_STATE_RELEASED:
+            return False
+
+        return True
+        # return prev_action and prev_action.lock_state != LOCK_STATE_RELEASED
+
+    def conflict_serializability_by_postlease(
+        self, action: ActionInfo, entity_id: str, new_action: ActionEntity
+    ) -> bool:
+        """Check if the serializability conflicts if the new action places after the action."""
+        next_action = self._lineage_table.lock_queues[entity_id].next(action.action_id)
+
+        return bool(
+            next_action
+            and get_routine_id(next_action.action_id)
+            != get_routine_id(new_action.action_id)
+        )
+
+        # return (
+        #     True
+        #     if next_action
+        #     and get_routine_id(next_action.action_id)
+        #     != get_routine_id(new_action.action_id)
+        #     else False
+        # )
+
+    def conflict_determined_serializability(
+        self,
+        action: ActionInfo,
+        lock_leasing: str,
+        lock_leasing_status: dict[str, str],
+    ) -> bool:
+        """Check if the determined serializability conflicts if the new action places before the action."""
+
+        idx1 = self._serialization_order.index(get_routine_id(action.action_id))
+
+        for routine_id, lease_status in lock_leasing_status.items():
+            idx2 = self._serialization_order.index(routine_id)
+
+            if (lock_leasing == "pre" and lease_status == "post" and idx1 <= idx2) or (
+                lock_leasing == "post" and lease_status == "pre" and idx1 >= idx2
+            ):
+                return True
+
+        lock_leasing_status[get_routine_id(action.action_id)] = lock_leasing
+        return False
+
+    def action_running(
+        self, action: ActionInfo, entity_id: str, lock_leasing: str
+    ) -> bool:
+        """Check if action is running."""
+        if not action.action_id:
+            return False
+
+        action_info = self._lineage_table.lock_queues[entity_id].get(action.action_id)
+
+        if not action_info:
+            return False
+
+        if lock_leasing == "pre" and action_info:
+            return action_info.action_state in (RASC_ACK, RASC_START, RASC_COMPLETE)
+
+        if action_info:
+            return action_info.action_state in (RASC_START, RASC_COMPLETE)
+
+        return False
+
+    def schedule_action(
+        self,
+        slot: tuple[datetime, datetime | None],
+        action_slot: tuple[datetime, datetime],
+        free_slots: Queue[datetime, datetime],
+        entity_id: str | None = None,
+    ) -> datetime:
+        """Insert the action to the current time slot and then return the expected end time of the new action."""
+        slot_st, slot_end = slot
+        action_st, action_end = action_slot
+
+        _LOGGER.debug(
+            "Schedule action in %s of slot %s on entity: %s",
+            time_range_to_string(action_slot),
+            time_range_to_string(slot),
+            entity_id or "",
+        )
+
+        # To avoid many fragmentations
+        # start_offset = (dt_new_slot_st - dt_slot_st).total_seconds() >= TIMELINE_UNIT
+        # end_offset = (dt_slot_end - dt_new_slot_end).total_seconds() >= TIMELINE_UNIT if  dt_slot_end else True
+        # _LOGGER.info("Insert time slot: start_offset: %s end_offset: %s", start_offset, end_offset)
+
+        if slot_st == action_st and slot_end == action_end:
+            free_slots.pop(slot_st)
+
+        elif slot_st == action_st and action_end != slot_st:
+            free_slots.insert_after(slot_st, action_end, slot_end)
+            free_slots.pop(slot_st)
+
+        elif slot_end == action_end:
+            free_slots.updateitem(slot_st, action_st)
+
+        else:
+            free_slots.insert_after(slot_st, action_end, slot_end)
+            free_slots.updateitem(slot_st, action_st)
+
+        # _LOGGER.info("%s: free slots: %s", entity_id or "", free_slots)
+
+        return action_end
+
+    def schedule_lock(
+        self,
+        new_action: ActionEntity,
+        new_action_slot: tuple[datetime, datetime],
+        entity_id: str,
+        lock_queues: dict[str, Queue[str, ActionInfo]] | None = None,
+    ) -> None:
+        """Scheduled the given action in the lock queue."""
+        if not lock_queues:
+            lock_queues = self._lineage_table.lock_queues
+
+        new_action_info = ActionInfo(
+            new_action.action_id,
+            new_action,
+            RASC_SCHEDULED,
+            LOCK_STATE_SCHEDULED,
+            new_action_slot[0],
+            new_action_slot[1],
+        )
+
+        for action_id, action_info in lock_queues[entity_id].items():
+            if not action_info:
+                raise ValueError(
+                    f"Action {action_id}'s schedule information on entity {entity_id} is missing."
+                )
+            if new_action.action_id == action_id:
+                return
+                # raise ValueError(
+                #     "The action {} is already in {}'s lock queue {}".format(
+                #         new_action.action_id, entity_id, lock_queues[entity_id]
+                #     )
+                # )
+            if new_action_slot[1] <= action_info.start_time:
+                lock_queues[entity_id].insert_before(
+                    action_id, new_action.action_id, new_action_info
+                )
+                self.update_real_schedule(entity_id, new_action, new_action_slot)
+                _LOGGER.debug(
+                    "Schedule the action %s to the lock queue %s: %s-%s",
+                    new_action.action_id,
+                    entity_id,
+                    datetime_to_string(new_action_slot[0]),
+                    datetime_to_string(new_action_slot[1]),
+                )
+                return
+
+        self.update_real_schedule(entity_id, new_action, new_action_slot)
+
+        lock_queues[entity_id][new_action.action_id] = new_action_info
+        _LOGGER.debug(
+            "Schedule action %s to the lock queue %s: %s",
+            new_action.action_id,
+            entity_id,
+            new_action_slot,
+        )
+
+        self._hass.data["rasc_events"].append(
+            (
+                datetime.now(UTC).strftime("%H:%M:%S.%f")[:-3],
+                f"Schedule {new_action.action_id} at {new_action_slot}",
+            )
+        )
+
+    def update_real_schedule(
+        self,
+        entity_id: str,
+        new_action: ActionEntity,
+        new_action_slot: tuple[datetime, datetime],
+    ):
+        """Update the real schedule for an entity."""
+        if entity_id not in self._real_schedule:
+            self._real_schedule[entity_id] = []
+
+        actions = [item["action"] for item in self._real_schedule[entity_id]]  # type: ignore[call-overload]
+        if new_action.action_id not in actions:
+            self._real_schedule[entity_id].append(
+                {"action": new_action.action_id, "slot": new_action_slot}  # type: ignore[arg-type]
+            )
+        else:
+            idx = actions.index(new_action.action_id)  # type: ignore[arg-type]
+            self._real_schedule[entity_id][idx]["slot"] = new_action_slot  # type: ignore[index]
+
+        self._real_schedule[entity_id] = sorted(
+            self._real_schedule[entity_id],
+            key=cmp_to_key(
+                lambda x, y: x["slot"][0].timestamp() - y["slot"][0].timestamp()  # type: ignore[call-overload, index]
+            ),
+        )
+
+    def same_start_time(self, group_start_time: dict[str, datetime]) -> bool:
+        """Check if all the group commands within an action have the same start time."""
+        start_times = list(group_start_time.values())
+        return len(set(start_times)) == 1
+
+    def schedule_all_action(
+        self,
+        action: ActionEntity,
+        now: datetime,
+        free_slots: dict[str, Queue[datetime, datetime]],
+        lock_leasing_status: dict[str, str],
+    ) -> tuple[bool, datetime]:
+        """Schuedle the given action."""
+
+        target_entities = get_target_entities(self._hass, action.action)
+        max_end_time = now
+
+        _LOGGER.debug(
+            "Start scheduling action %s at time %s",
+            action.action_id,
+            datetime_to_string(now),
+        )
+
+        group_action_start_time: dict[str, datetime] = {}
+        group_slot_start_time: dict[str, datetime] = {}
+
+        for entity in target_entities:
+            entity_id = get_entity_id_from_number(self._hass, entity)
+
+            start_time = self.get_available_ts(
+                now, free_slots, entity_id, lock_leasing_status, action
+            )
+
+            if not start_time:
+                return False, now
+
+            group_action_start_time[entity_id] = max(start_time, now)
+            group_slot_start_time[entity_id] = start_time
+
+        while not self.same_start_time(group_action_start_time):
+            next_now = max(group_action_start_time.values())
+            group_action_start_time.clear()
+            group_slot_start_time.clear()
+
+            for entity in target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+
+                start_time = self.get_available_ts(
+                    next_now, free_slots, entity_id, lock_leasing_status, action
+                )
+                if not start_time:
+                    return False, now
+
+                group_action_start_time[entity_id] = max(start_time, next_now)
+                group_slot_start_time[entity_id] = start_time
+
+        for entity_id, start_time in group_slot_start_time.items():
+            action_st = max(group_action_start_time[entity_id], now)
+            action_end = action_st + action.length(entity_id)
+
+            self.schedule_action(
+                (start_time, free_slots[entity_id][start_time]),
+                (action_st, action_end),
+                free_slots[entity_id],
+                entity_id,
+            )
+            self.schedule_lock(action, (action_st, action_end), entity_id)
+
+            max_end_time = max(max_end_time, action_end)
+
+        return True, max_end_time
+
+    def schedule_routine(
+        self, hass: HomeAssistant, routine: RoutineEntity
+    ) -> tuple[bool, dict[str, str] | None]:
+        """Schedule the given routine."""
+
+        _LOGGER.info("Start scheduling the routine %s", routine.routine_id)
+
+        # Remove time slots before now
+        # self.remove_time_slots_before_now(
+        #     datetime.now(), self._lineage_table.free_slots
+        # )
+
+        # Deep copy the free slots
+        tmp_fs = copy.deepcopy(self._lineage_table.free_slots)
+
+        # Store the current routine lock status
+        lock_leasing_status = dict[str, str]()
+
+        # Store the information for the action id
+        config: dict[str, Any] = {}
+        config[CONF_STEP] = -1
+        config[CONF_ROUTINE_ID] = routine.routine_id
+
+        next_end_time: datetime | None = datetime.now(UTC)
+        for _, script in enumerate(routine.action_script):
+            if not next_end_time:
+                return False, None
+
+            if (
+                CONF_PARALLEL not in script
+                and CONF_SEQUENCE not in script
+                and CONF_SERVICE not in script
+                and CONF_DELAY not in script
+            ):
+                config[CONF_STEP] = config[CONF_STEP] + 1
+                action_id = f"{config[CONF_ROUTINE_ID]}.{config[CONF_STEP]}"
+                action = routine.actions[action_id]
+
+                success, next_end_time = self.schedule_all_action(
+                    action, next_end_time, tmp_fs, lock_leasing_status
+                )
+            else:
+                success, next_end_time = self._schedule_routine(
+                    hass,
+                    script,
+                    config,
+                    routine,
+                    next_end_time,
+                    tmp_fs,
+                    lock_leasing_status,
+                )
+
+            if not success:
+                return False, None
+
+        self._lineage_table.free_slots = tmp_fs  # type: ignore[misc]
+        return True, lock_leasing_status
+
+    def _schedule_routine(
+        self,
+        hass: HomeAssistant,
+        script: dict[str, Any],
+        config: dict[str, Any],
+        routine: RoutineEntity,
+        prev_end_time: datetime,
+        free_slots: dict[str, Queue[datetime, datetime]],
+        lock_leasing_status: dict[str, str],
+    ) -> tuple[bool, datetime | None]:
+        """Scheudle the given routine with the given script."""
+        next_end_time: datetime | None = prev_end_time
+
+        if CONF_PARALLEL in script:
+            item_end_time: datetime | None
+            for item in list(script.values())[0]:
+                success, item_end_time = self._schedule_routine(
+                    hass,
+                    item,
+                    config,
+                    routine,
+                    prev_end_time,
+                    free_slots,
+                    lock_leasing_status,
+                )
+                if not success or not item_end_time or not next_end_time:
+                    return False, None
+                next_end_time = max(next_end_time, item_end_time)
+
+        elif CONF_SEQUENCE in script:
+            for item in list(script.values())[0]:
+                if not next_end_time:
+                    return False, None
+                success, next_end_time = self._schedule_routine(
+                    hass,
+                    item,
+                    config,
+                    routine,
+                    next_end_time,
+                    free_slots,
+                    lock_leasing_status,
+                )
+                if not success:
+                    return False, None
+
+        elif CONF_SERVICE in script:
+            service: str = script[CONF_SERVICE]
+            domain = service.split(".", maxsplit=1)[0]
+            if domain == DOMAIN_SCRIPT:
+                script_component: EntityComponent[BaseScriptEntity] = hass.data[
+                    DOMAIN_SCRIPT
+                ]
+
+                if not script_component:
+                    return False, None
+
+                base_script = script_component.get_entity(list(script.values())[0])
+                if base_script and base_script.raw_config:
+                    for item in base_script.raw_config[CONF_SEQUENCE]:
+                        if not next_end_time:
+                            return False, None
+                        success, next_end_time = self._schedule_routine(
+                            hass,
+                            item,
+                            config,
+                            routine,
+                            next_end_time,
+                            free_slots,
+                            lock_leasing_status,
+                        )
+                        if not success:
+                            return False, None
+
+            else:
+                config[CONF_STEP] = config[CONF_STEP] + 1
+                action_id = f"{config[CONF_ROUTINE_ID]}.{config[CONF_STEP]}"
+                action = routine.actions[action_id]
+
+                if not next_end_time:
+                    return False, None
+                success, next_end_time = self.schedule_all_action(
+                    action, next_end_time, free_slots, lock_leasing_status
+                )
+                if not success:
+                    return False, None
+
+        elif CONF_DELAY in script:
+            pass
+
+        else:
+            config[CONF_STEP] = config[CONF_STEP] + 1
+            action_id = f"{config[CONF_ROUTINE_ID]}.{config[CONF_STEP]}"
+            action = routine.actions[action_id]
+
+            if not next_end_time:
+                return False, None
+            success, next_end_time = self.schedule_all_action(
+                action, next_end_time, free_slots, lock_leasing_status
+            )
+
+            if not success:
+                return False, None
+
+        return True, next_end_time
+
+
+class FirstComeFirstServeScheduler(BaseScheduler):
+    """A class for fcfs scheduler."""
+
+
+class JustInTimeScheduler(BaseScheduler):
+    """A class for jit scheduler."""
+
+
+class TimeLineScheduler(BaseScheduler):
+    """A class for timeline scheduler."""
+
+    def get_next_start_time(
+        self, routine: RoutineEntity, preset: set[str], postset: set[str]
+    ) -> dict[str, datetime]:
+        """Get then next start time for the given routine."""
+        # The idea is to reschedule the routine after the routines in the postset.
+
+        # _LOGGER.debug(f"{preset=}, {postset=}")
+        target_entities: list[str] = []
+        next_start_time: dict[str, datetime] = {
+            entity_id: datetime.now(UTC)
+            for entity_id in get_routine_targets(self._hass, routine)
+        }
+
+        # get target entities
+        for action in list(routine.actions.values())[:-1]:
+            entities = get_target_entities(self._hass, action.action)
+            for entity in entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+
+                if entity_id not in target_entities:
+                    target_entities.append(entity_id)
+
+        for routine_id in preset.union(postset):
+            for action in list(
+                self._serialization_order[routine_id].routine.actions.values()  # type: ignore[union-attr]
+            )[:-1]:
+                entities = get_target_entities(self._hass, action.action)
+                for entity in entities:
+                    entity_id = get_entity_id_from_number(self._hass, entity)
+
+                    if entity_id in target_entities:
+                        action_info = self.get_action_info(action.action_id, entity_id)
+                        if not action_info:
+                            raise ValueError(
+                                f"Action {action.action_id}'s schedule info on entity {entity_id} is missing."
+                            )
+
+                        if (
+                            entity_id not in next_start_time
+                            or next_start_time[entity_id] < action_info.end_time
+                        ):
+                            next_start_time[entity_id] = action_info.end_time
+                        # .candidates.append(action_info.end_time)
+
+        # for routine_id_in_postset in postset:
+        #     routine_in_postset = self._serialization_order[routine_id_in_postset]
+        #     if not routine_in_postset:
+        #         raise ValueError(
+        #             "The routine {} in the postset is missing from the serialization order".format(
+        #                 routine_id_in_postset
+        #             )
+        #         )
+
+        #     for action in list(routine_in_postset.routine.actions.values())[:-1]:
+        #         entities = get_target_entities(self._hass, action.action)
+        #         # find_candidate = False
+        #         for entity in entities:
+        #             entity_id = get_entity_id_from_number(self._hass, entity)
+
+        #             if entity_id in target_entities:
+        #                 action_info = self.get_action_info(action.action_id, entity_id)
+        #                 if not action_info:
+        #                     raise ValueError(
+        #                         "Action {}'s schedule info on entity {} is missing.".format(
+        #                             action.action_id, entity_id
+        #                         )
+        #                     )
+        #                 candidates.append(action_info.end_time)
+        #                 # find_candidate = True
+
+        #         # Only require to identify the earliest action end time within the existing routines that may cause a serializability conflict.
+        #         # if find_candidate:
+        #         #     break
+
+        # for routine_id_in_preset in preset:
+        #     routine_in_preset = self._serialization_order[routine_id_in_preset]
+        #     if not routine_in_preset:
+        #         raise ValueError(
+        #             "The routine {} in the preset is missing from the serialization order".format(
+        #                 routine_id_in_preset
+        #             )
+        #         )
+
+        #     for action in list(routine_in_preset.routine.actions.values())[:-1]:
+        #         entities = get_target_entities(self._hass, action.action)
+        #         # find_candidate = False
+        #         for entity in entities:
+        #             entity_id = get_entity_id_from_number(self._hass, entity)
+
+        #             if entity_id in target_entities:
+        #                 action_info = self.get_action_info(action.action_id, entity_id)
+        #                 if not action_info:
+        #                     raise ValueError(
+        #                         "Action {}'s schedule info on entity {} is missing.".format(
+        #                             action.action_id, entity_id
+        #                         )
+        #                     )
+        #                 candidates.append(action_info.end_time)
+        #                 # find_candidate = True
+
+        #         # Only require to identify the earliest action end time within the existing routines that may cause a serializability conflict.
+        #         # if find_candidate:
+        #         #     break
+        # _LOGGER.info(f"{candidates=}")
+        # return max(candidates)
+        return next_start_time
+
+    def conflict_determined_serializability_in_case_tl(
+        self, preset: set[str], postset: set[str]
+    ) -> bool:
+        """Check if the determined serializability conflicts."""
+
+        output_all(_LOGGER, serialization_order=self._serialization_order)
+
+        for routine_in_preset in preset:
+            idx1 = self._serialization_order.index(routine_in_preset)
+
+            for routine_in_poset in postset:
+                idx2 = self._serialization_order.index(routine_in_poset)
+
+                if idx1 > idx2:
+                    _LOGGER.warning("Conflict determined serializability in timeline")
+                    return True
+
+        return False
+
+    def get_available_ts_by_tl(
+        self,
+        free_slots: dict[str, Queue[datetime, datetime]],
+        now: datetime,
+        entity_id: str,
+        lock_leasing_status: dict[str, str],
+        preset: set[str],
+        postset: set[str],
+        new_action: ActionEntity,
+    ) -> tuple[datetime | None, set[str] | None]:
+        """Get available time slot by timeline."""
+        # _LOGGER.info(
+        #     "Free slots for entity %s: %s",
+        #     entity_id,
+        #     free_slots[entity_id],
+        # )
+        # _LOGGER.info(
+        #     "Lock queue for entity %s: %s",
+        #     entity_id,
+        #     [
+        #         f"{action_id}: {datetime_to_string(action_lock.start_time)}-{datetime_to_string(action_lock.end_time)}"
+        #         for action_id, action_lock in self._lineage_table.lock_queues[
+        #             entity_id
+        #         ].items()
+        #     ],
+        # )
+
+        conflict = None
+        cur_preset, cur_postset = set[str](), set[str]()
+        for slot_start, slot_end in free_slots[entity_id].items():
+            # Check if the gap is available
+            if slot_end and slot_end <= now:
+                continue
+
+            # Check if the gap is big enough to place the new action
+            if slot_end and (slot_end - max(slot_start, now)).total_seconds() < max(
+                new_action.length(entity_id).total_seconds(), 2
+            ):
+                continue
+
+            action_st = max(slot_start, now)
+            action_end = action_st + max(
+                new_action.length(entity_id), timedelta(seconds=2)
+            )
+            cur_preset = preset.union(
+                self.get_preset(
+                    (action_st, action_end), entity_id, lock_leasing_status, new_action
+                )
+            )
+
+            cur_postset = postset.union(
+                self.get_postset(
+                    (action_st, action_end), entity_id, lock_leasing_status, new_action
+                )
+            )
+
+            if cur_preset.intersection(cur_postset):
+                # _LOGGER.warning(
+                #     "Attempt to schedule at the time slot %s with the action (%s) start time %s. Intersection conflict: %s",
+                #     slot_start,
+                #     new_action.action_id,
+                #     action_st,
+                #     cur_preset.intersection(cur_postset),
+                # )
+                conflict = cur_preset.intersection(cur_postset)
+                continue
+
+            if self.conflict_determined_serializability_in_case_tl(
+                cur_preset, cur_postset
+            ):
+                _LOGGER.debug(
+                    "Attempt to schedule at the time slot %s with the action start time %s. "
+                    "Determined serializability conflict, preset: %s, postset: %s",
+                    slot_start,
+                    action_st,
+                    cur_preset,
+                    cur_postset,
+                )
+                conflict = cur_preset.union(cur_postset)
+                continue
+
+            preset.update(cur_preset)
+            postset.update(cur_postset)
+            return slot_start, None
+
+        preset.update(cur_preset)
+        postset.update(cur_postset)
+
+        return None, conflict
+
+    def get_preset(
+        self,
+        gap: tuple[datetime, datetime | None],
+        entity_id: str,
+        lock_leasing_status: dict[str, str],
+        new_action: ActionEntity,
+    ) -> set[str]:
+        """Get preset."""
+
+        gap_start_time = gap[0]
+        preset = set[str]()
+        for action in self._lineage_table.lock_queues[entity_id].values():
+            if not action:
+                continue
+            if action.end_time <= gap_start_time and get_routine_id(
+                action.action_id
+            ) != get_routine_id(new_action.action_id):
+                preset.add(get_routine_id(action.action_id))
+                lock_leasing_status[get_routine_id(action.action_id)] = "post"
+
+        return preset
+
+    def get_postset(
+        self,
+        gap: tuple[datetime, datetime | None],
+        entity_id: str,
+        lock_leasing_status: dict[str, str],
+        new_action: ActionEntity,
+    ) -> set[str]:
+        """Get postset."""
+
+        gap_end_time = gap[1]
+        postset = set[str]()
+        if not gap_end_time:
+            return postset
+
+        for action in self._lineage_table.lock_queues[entity_id].values():
+            if not action:
+                continue
+            if action.start_time >= gap_end_time and get_routine_id(
+                action.action_id
+            ) != get_routine_id(new_action.action_id):
+                postset.add(get_routine_id(action.action_id))
+                lock_leasing_status[get_routine_id(action.action_id)] = "pre"
+
+        return postset
+
+    def get_available_ts_in_case_tl(
+        self,
+        now: datetime,
+        free_slots: dict[str, Queue[datetime, datetime]],
+        entity_id: str,
+        lock_leasing_status: dict[str, str],
+        preset: set[str],
+        postset: set[str],
+        new_action: ActionEntity,
+    ) -> tuple[datetime | None, set[str] | None]:
+        """Get the start time of the first available time slot in the entity."""
+
+        start_time, conflict = self.get_available_ts_by_tl(
+            free_slots, now, entity_id, lock_leasing_status, preset, postset, new_action
+        )
+
+        output_all(_LOGGER, preset=preset, postset=postset)
+
+        # _LOGGER.debug(
+        #     "The start time of the new time slot for the new action in entity %s is %s",
+        #     entity_id,
+        #     datetime_to_string(start_time) if start_time else None,
+        # )
+
+        return start_time, conflict
+
+    def schedule_all_action_in_case_tl(
+        self,
+        action: ActionEntity,
+        now: dict[str, datetime],
+        free_slots: dict[str, Queue[datetime, datetime]],
+        lock_leasing_status: dict[str, str],
+        preset: set[str],
+        postset: set[str],
+    ) -> tuple[bool, datetime, set[str] | None, datetime]:
+        """Insert action to the free slots at now based on lock leasing approach."""
+
+        target_entities = get_target_entities(self._hass, action.action)
+        max_end_time = now
+
+        _LOGGER.debug(
+            "Action %s start scheduling at time",
+            action.action_id,
+            # datetime_to_string(now),
+        )
+
+        group_action_start_time: dict[str, datetime] = {}
+        group_slot_start_time: dict[str, datetime] = {}
+
+        max_parent_end_time = None
+        for parent in action.all_parents:
+            parent_target_entities = get_target_entities(self._hass, parent.action)
+            for entity in parent_target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+                max_parent_end_time = (
+                    max(now[entity_id], max_parent_end_time)
+                    if max_parent_end_time
+                    else now[entity_id]
+                )
+
+        _LOGGER.debug("max parent end time :%s", max_parent_end_time)
+        for entity in target_entities:
+            entity_id = get_entity_id_from_number(self._hass, entity)
+
+            start_time, conflict = self.get_available_ts_in_case_tl(
+                max(now[entity_id], max_parent_end_time)
+                if max_parent_end_time
+                else now[entity_id],
+                free_slots,
+                entity_id,
+                lock_leasing_status,
+                preset,
+                postset,
+                action,
+            )
+
+            if not start_time:
+                # _LOGGER.warning(
+                #     "Failed to find a time slot start at %s. Need to reschedule",
+                #     now[entity_id],
+                # )
+                return False, max_end_time, conflict  # type: ignore[return-value]
+
+            group_action_start_time[entity_id] = max(start_time, now[entity_id])
+            group_slot_start_time[entity_id] = start_time
+
+        if not group_action_start_time:
+            raise ValueError("No entities to schedule on!")
+
+        actual_start_time = datetime.now(UTC)
+        while not self.same_start_time(group_action_start_time):
+            actual_start_time = max(group_action_start_time.values())
+            group_action_start_time.clear()
+            group_slot_start_time.clear()
+
+            for entity in target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+
+                start_time, conflict = self.get_available_ts_in_case_tl(
+                    actual_start_time,
+                    free_slots,
+                    entity_id,
+                    lock_leasing_status,
+                    preset,
+                    postset,
+                    action,
+                )
+
+                if not start_time:
+                    # _LOGGER.warning(
+                    #     "Failed to find a time slot start at %s. Need to reschedule",
+                    #     now[entity_id],
+                    # )
+                    return False, max_end_time, conflict  # type: ignore[return-value]
+
+                group_action_start_time[entity_id] = max(start_time, actual_start_time)
+                group_slot_start_time[entity_id] = start_time
+
+        actual_start_time = max(group_action_start_time.values())
+
+        for entity_id, start_time in group_slot_start_time.items():
+            action_st = (
+                max(actual_start_time, now[entity_id], max_parent_end_time)
+                if max_parent_end_time
+                else max(actual_start_time, now[entity_id])
+            )
+            action_length = max(action.length(entity_id), timedelta(seconds=2))
+            action_end = action_st + action_length
+
+            self.schedule_action(
+                (start_time, free_slots[entity_id][start_time]),
+                (action_st, action_end),
+                free_slots[entity_id],
+                entity_id,
+            )
+
+            self.schedule_lock(action, (action_st, action_end), entity_id)
+
+            max_end_time[entity_id] = max(max_end_time[entity_id], action_end)
+
+        return True, max_end_time, None  # type: ignore[return-value]
+
+    def schedule_routine_in_case_tl(
+        self,
+        hass: HomeAssistant,
+        routine: RoutineEntity,
+        next_start_time: dict[str, datetime] | None = None,
+    ) -> tuple[bool, dict[str, str], set[str] | None]:
+        """Schedule the given routine."""
+
+        _LOGGER.info("Start scheduling the routine %s", routine.routine_id)
+        start = time.time()
+
+        if not next_start_time:
+            next_start_time = {
+                entity_id: datetime.now(UTC)
+                for entity_id in get_routine_targets(self._hass, routine)
+            }
+
+        # Remove time slots before now
+        # + generate_duration(MAX_SCHEDULE_TIME)
+        next_end_time = next_start_time
+        # self.remove_time_slots_before_now(
+        #     datetime.now(), self._lineage_table.free_slots
+        # )
+
+        # Deep copy the free slots
+        tmp_fs = copy.deepcopy(self._lineage_table.free_slots)
+
+        # Store the current routine lock status
+        lock_leasing_status: dict[str, str] = {}
+
+        # Store the information for the action id
+        config: dict[str, Any] = {}
+        config[CONF_STEP] = -1
+        config[CONF_ROUTINE_ID] = routine.routine_id
+
+        preset = set[str]()
+        postset = set[str]()
+
+        for _, script in enumerate(routine.action_script):
+            if (
+                CONF_PARALLEL not in script
+                and CONF_SEQUENCE not in script
+                and CONF_SERVICE not in script
+                and CONF_DELAY not in script
+            ):
+                config[CONF_STEP] = config[CONF_STEP] + 1
+                action_id = f"{config[CONF_ROUTINE_ID]}.{config[CONF_STEP]}"
+                action = routine.actions[action_id]
+
+                success, next_end_time, conflict = self.schedule_all_action_in_case_tl(  # type: ignore[misc]
+                    action, next_end_time, tmp_fs, lock_leasing_status, preset, postset
+                )
+
+            else:
+                success, next_end_time, conflict = self._schedule_routine_in_case_tl(  # type: ignore[assignment]
+                    hass,
+                    script,
+                    config,
+                    routine,
+                    next_end_time,
+                    tmp_fs,
+                    lock_leasing_status,
+                    preset,
+                    postset,
+                )
+
+            if not success:
+                next_start_time = self.get_next_start_time(routine, preset, postset)
+                return (
+                    False,
+                    {"next_start_time": next_start_time},  # type: ignore[dict-item]
+                    conflict,
+                )
+
+        self._lineage_table.free_slots = tmp_fs  # type: ignore[misc]
+        self.set_earliest_end_time(routine)
+        end = time.time()
+        _LOGGER.debug(
+            "Scheduling routine %s took %s seconds",
+            routine.routine_id,
+            end - start,
+        )
+        return True, lock_leasing_status, None
+
+    def _schedule_routine_in_case_tl(
+        self,
+        hass: HomeAssistant,
+        script: dict[str, Any],
+        config: dict[str, Any],
+        routine: RoutineEntity,
+        prev_end_time: dict[str, datetime],
+        free_slots: dict[str, Queue],
+        lock_leasing_status: dict[str, str],
+        preset: set[str],
+        postset: set[str],
+    ) -> tuple[bool, datetime, set[str] | None]:
+        """Schedule the given routine with the given script."""
+        next_end_time = prev_end_time
+
+        if CONF_PARALLEL in script:
+            for item in list(script.values())[0]:
+                success, item_end_time, conflict = self._schedule_routine_in_case_tl(
+                    hass,
+                    item,
+                    config,
+                    routine,
+                    prev_end_time,
+                    free_slots,
+                    lock_leasing_status,
+                    preset,
+                    postset,
+                )
+
+                if not success:
+                    return False, next_end_time, conflict  # type: ignore[return-value]
+
+                next_end_time = {
+                    entity_id: max(next_end_time[entity_id], item_end_time[entity_id])  # type: ignore[index]
+                    for entity_id in next_end_time
+                }
+                # next_end_time = max(next_end_time, item_end_time)
+
+        elif CONF_SEQUENCE in script:
+            for item in list(script.values())[0]:
+                success, next_end_time, conflict = self._schedule_routine_in_case_tl(  # type: ignore[assignment]
+                    hass,
+                    item,
+                    config,
+                    routine,
+                    next_end_time,
+                    free_slots,
+                    lock_leasing_status,
+                    preset,
+                    postset,
+                )
+
+                if not success:
+                    return False, next_end_time, conflict  # type: ignore[return-value]
+
+        elif CONF_SERVICE in script:
+            temp: str = script[CONF_SERVICE]
+            domain = temp.split(".", maxsplit=1)[0]
+            if domain == DOMAIN_SCRIPT:
+                script_component: EntityComponent[BaseScriptEntity] | None = (
+                    hass.data.get(DOMAIN_SCRIPT)
+                )
+
+                if not script_component:
+                    return False, next_end_time, None  # type: ignore[return-value]
+
+                base_script = script_component.get_entity(list(script.values())[0])
+                if base_script and base_script.raw_config:
+                    for item in base_script.raw_config[CONF_SEQUENCE]:
+                        (
+                            success,
+                            next_end_time,
+                            conflict,
+                        ) = self._schedule_routine_in_case_tl(  # type: ignore[assignment]
+                            hass,
+                            item,
+                            config,
+                            routine,
+                            next_end_time,
+                            free_slots,
+                            lock_leasing_status,
+                            preset,
+                            postset,
+                        )
+
+                        if not success:
+                            return False, next_end_time, conflict  # type: ignore[return-value]
+
+            else:
+                config[CONF_STEP] = config[CONF_STEP] + 1
+                action_id = f"{config[CONF_ROUTINE_ID]}.{config[CONF_STEP]}"
+                action = routine.actions[action_id]
+
+                success, next_end_time, conflict = self.schedule_all_action_in_case_tl(  # type: ignore[misc]
+                    action,
+                    next_end_time,
+                    free_slots,
+                    lock_leasing_status,
+                    preset,
+                    postset,
+                )
+                if not success:
+                    return False, next_end_time, conflict  # type: ignore[return-value]
+
+        elif CONF_DELAY in script:
+            pass
+
+        else:
+            config[CONF_STEP] = config[CONF_STEP] + 1
+            action_id = f"{config[CONF_ROUTINE_ID]}.{config[CONF_STEP]}"
+            action = routine.actions[action_id]
+
+            success, next_end_time, conflict = self.schedule_all_action_in_case_tl(  # type: ignore[misc]
+                action, next_end_time, free_slots, lock_leasing_status, preset, postset
+            )
+
+            if not success:
+                return False, next_end_time, conflict  # type: ignore[return-value]
+
+        return True, next_end_time, None  # type: ignore[return-value]
+
+    def set_earliest_end_time(self, routine: RoutineEntity) -> None:
+        """Set the earliest end time of the given routine for rescheduling."""
+        min_end_time: None | datetime = None
+        min_end_time_entity_id: str
+
+        for action in list(routine.actions.values())[:-1]:
+            target_entities = get_target_entities(self._hass, action.action)
+            for entity in target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+                action_info = self.get_action_info(action.action_id, entity_id)
+                if not action_info:
+                    raise ValueError(
+                        f"Action {action.action_id}'s schedule information on entity {entity_id} is missing."
+                    )
+                if not min_end_time:
+                    min_end_time_entity_id = entity_id
+                    min_end_time = action_info.end_time
+                elif (
+                    entity_id == min_end_time_entity_id
+                    and action_info.end_time > min_end_time
+                ):
+                    min_end_time = action_info.end_time
+                elif (
+                    entity_id != min_end_time_entity_id
+                    and action_info.end_time < min_end_time
+                ):
+                    min_end_time_entity_id = entity_id
+                    min_end_time = action_info.end_time
+
+        if not min_end_time:
+            return
+
+        routine.earliest_end_time = min_end_time
+
+
+class RascalScheduler(BaseScheduler):
+    """A class for rascal scheduler."""
+
+    def __init__(self, hass: HomeAssistant, config: ConfigType) -> None:  # pylint: disable=super-init-not-called
+        """Initialize rascal scheduler."""
+        self._hass = hass
+        self._lineage_table = LineageTable()
+        self._serialization_order = Queue[str, RoutineInfo]()
+        self._lock_waitlist = dict[str, list[str]]()
+        self._wait_queue = Queue[str, WaitRoutineInfo]()
+        self._scheduling_policy: str = config[CONF_SCHEDULING_POLICY]
+        self._scheduler: BaseScheduler | TimeLineScheduler | None = (
+            self._get_scheduler()
+        )
+        self._logging: bool = True
+        self._reschedule_handler: (
+            Callable[[Event], Coroutine[Any, Any, None]] | None
+        ) = None
+        self._metrics = ScheduleMetrics(
+            config[CONF_RESCHEDULING_POLICY], result_dir=config.get("results_dir")
+        )
+        self._record_results = config[CONF_RECORD_RESULTS]
+        if self._record_results:
+            self._result_dir = config["results_dir"]
+        self.action_start_method: str = config[CONF_ACTION_START_METHOD]
+        self._hass.bus.async_listen(RASC_RESPONSE, self.handle_event)
+
+        self._action_tasks: dict[str, asyncio.Task] = {}
+        self.handle_event_lock = asyncio.Lock()
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a dictionary representation of the object."""
+        return {
+            "lineage_table": vars(self._lineage_table),
+            "serialization_order": {
+                key: vars(value) for key, value in self._serialization_order.items()
+            },
+            "lock_waitlist": self._lock_waitlist,
+            "wait_queue": {key: vars(value) for key, value in self._wait_queue.items()},
+            "scheduling_policy": self._scheduling_policy,
+            "logging": self._logging,
+            "metrics": self._metrics.__dict__,
+            "action_start_method": self.action_start_method,
+        }
+
+    @property
+    def lineage_table(self) -> LineageTable:
+        """Get lineage table."""
+        return self._lineage_table
+
+    @lineage_table.setter
+    def lineage_table(self, lt: LineageTable) -> None:
+        """Set lineage table."""
+        self._lineage_table = lt
+        if self._scheduler:
+            self._scheduler.lineage_table = lt
+
+    @property
+    def serialization_order(self) -> Queue[str, RoutineInfo]:
+        """Get serialization order."""
+        return self._serialization_order
+
+    @serialization_order.setter
+    def serialization_order(self, so: Queue[str, RoutineInfo]) -> None:
+        """Set serialization order."""
+        self._serialization_order = so
+        if self._scheduler:
+            self._scheduler.serialization_order = so
+
+    @property
+    def wait_queue(self) -> Queue[str, WaitRoutineInfo]:
+        """Get wait queue."""
+        return self._wait_queue
+
+    def add_entity(self, entity_id: str) -> None:
+        """Add lock waitlist."""
+        self._lock_waitlist[entity_id] = []
+
+    def delete_entity(self, entity_id: str) -> None:
+        """Delete lock waitlist."""
+        del self._lock_waitlist[entity_id]
+
+    def duplicate_locks(self) -> dict[str, str | None]:
+        """Duplicate locks."""
+        return copy.deepcopy(self._lineage_table.locks)
+
+    def duplicate_lock_queues(self) -> dict[str, Queue[str, ActionInfo]]:
+        """Duplicate lock queues."""
+        lock_queues = dict[str, Queue[str, ActionInfo]]()
+        for entity_id, queue in self._lineage_table.lock_queues.items():
+            lock_queues[entity_id] = Queue[str, ActionInfo]()
+            for action_id, action_info in queue.items():
+                if not action_info:
+                    raise ValueError(
+                        f"Action {action_id}'s schedule information on entity {entity_id} is missing."
+                    )
+                lock_queues[entity_id][action_id] = action_info.duplicate()
+        return lock_queues
+
+    def duplicate_serialization_order(self) -> Queue[str, RoutineInfo]:
+        """Duplicate serialization order."""
+        serialization_order = Queue[str, RoutineInfo]()
+        for routine_id, routine_info in self._serialization_order.items():
+            serialization_order[routine_id] = routine_info
+        return serialization_order
+
+    @property
+    def metrics(self) -> ScheduleMetrics:
+        """Get schedule metrics."""
+        return self._metrics
+
+    def _get_scheduler(self) -> BaseScheduler | TimeLineScheduler | None:
+        """Get scheduler."""
+
+        if self._scheduling_policy in (FCFS, FCFS_POST):
+            return FirstComeFirstServeScheduler(
+                self._hass,
+                self._lineage_table,
+                self._serialization_order,
+                self._scheduling_policy,
+            )
+
+        if self._scheduling_policy in (JIT):
+            return JustInTimeScheduler(
+                self._hass,
+                self._lineage_table,
+                self._serialization_order,
+                self._scheduling_policy,
+            )
+
+        if self._scheduling_policy in (TIMELINE):
+            return TimeLineScheduler(
+                self._hass,
+                self._lineage_table,
+                self._serialization_order,
+                self._scheduling_policy,
+            )
+
+        return None
+
+    def set_rescheduling_policy(self, rescheduling_policy: str) -> None:
+        """Set the rescheduling policy."""
+        self._metrics.set_rescheduling_policy(rescheduling_policy)
+
+    def set_reschedule_handler(
+        self,
+        handler: Callable[[Event], None],  # Coroutine[Any, Any, None]]
+    ) -> None:
+        """Set the handler function for the scheduler.
+
+        Args:
+            handler (Callable[[Event], Coroutine[Any, Any, None]]): The handler function of the rescheduled.
+        """
+        if self._reschedule_handler is not None:
+            _LOGGER.warning("Reschedule handler is already set. ")
+            return
+        self._reschedule_handler = handler  # type: ignore[assignment]
+
+    def _add_routine_to_serialization_order(
+        self, routine: RoutineEntity, lock_leasing_status: dict[str, str]
+    ) -> None:
+        """Add routine to the serialization order."""
+        routine_info = RoutineInfo(routine.routine_id, routine)
+        self._serialization_order[routine.routine_id] = routine_info
+
+        # Move the routine forward if prelease
+        filtered_status = {
+            key: value for key, value in lock_leasing_status.items() if value == "pre"
+        }
+
+        idx1 = self._serialization_order.index(routine.routine_id)
+        for key in filtered_status:
+            idx2 = self._serialization_order.index(key)
+
+            if idx1 > idx2:
+                self._remove_routine_from_serialization_order(routine.routine_id)
+                self._serialization_order.insert_before(
+                    key, routine.routine_id, routine_info
+                )
+
+        _LOGGER.debug("Add routine %s to the serialization order", routine.routine_id)
+        output_all(_LOGGER, serialization_order=self._serialization_order)
+
+        # Move the routine forward if prelease
+        filtered_status = {
+            key: value for key, value in lock_leasing_status.items() if value == "pre"
+        }
+
+        for key in filtered_status:
+            idx1 = self._serialization_order.index(routine.routine_id)
+            idx2 = self._serialization_order.index(key)
+
+            if idx1 > idx2:
+                self._remove_routine_from_serialization_order(routine.routine_id)
+                self._serialization_order.insert_before(
+                    key, routine.routine_id, routine_info
+                )
+
+        output_all(_LOGGER, serialization_order=self._serialization_order)
+
+    def _remove_routine_from_serialization_order(self, routine_id: str) -> None:
+        """Remove routine from the serialization order."""
+        if routine_id in self._serialization_order:
+            _LOGGER.debug("Remove routine %s from the serialization order", routine_id)
+        self._serialization_order.pop(routine_id)
+
+    def _remove_routine_from_lock_queues(self, routine: RoutineEntity) -> None:
+        """Remove routine from lock queues."""
+        _LOGGER.debug(
+            "Remove routine %s's actions from the lock queues", routine.routine_id
+        )
+        for action in list(routine.actions.values())[:-1]:
+            target_entities = get_target_entities(self._hass, action.action)
+            for entity in target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+                if action.action_id is not None:
+                    self._lineage_table.lock_queues[entity_id].pop(action.action_id)
+
+    def _add_routine_to_wait_queues(self, routine: RoutineEntity) -> None:
+        """Add routine to the wait queue."""
+        if not routine.routine_id:
+            raise ValueError("Routine id is not found")
+        for action in list(routine.actions.values())[:-1]:
+            target_entities = get_target_entities(self._hass, action.action)
+            for entity in target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+                if routine.routine_id not in self._lock_waitlist[entity_id]:
+                    self._lock_waitlist[entity_id].append(routine.routine_id)
+
+        self._wait_queue[routine.routine_id] = WaitRoutineInfo(
+            routine.routine_id, routine
+        )
+
+        _LOGGER.debug("Add routine %s to the wait queue", routine.routine_id)
+        output_all(
+            _LOGGER, lock_waitlist=self._lock_waitlist, wait_queue=self._wait_queue
+        )
+
+    def _remove_routine_from_wait_queue(self, routine_id: str) -> None:
+        """Remove routine from the wait queue."""
+        routine_info = self._wait_queue.pop(routine_id)
+        if not routine_info:
+            raise ValueError(f"Routine {routine_id} is not found in the wait queue")
+        routine = routine_info.routine
+
+        for action in list(routine.actions.values())[:-1]:
+            target_entities = get_target_entities(self._hass, action.action)
+            for entity in target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+                while routine_id in self._lock_waitlist[entity_id]:
+                    self._lock_waitlist[entity_id].remove(routine_id)
+
+        _LOGGER.debug("Remove routine %s from the wait queue", routine_id)
+
+    def _acquire_routine_locks(self, routine: RoutineEntity) -> bool:
+        """Acquire all locks for the routine."""
+
+        locks = self.duplicate_locks()
+        lock_queues = self.duplicate_lock_queues()
+
+        for action in list(routine.actions.values())[:-1]:
+            target_entities = get_target_entities(self._hass, action.action)
+            for entity in target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+                if not self._attempt_lock(
+                    action.action_id, entity_id, locks, lock_queues
+                ):
+                    _LOGGER.error(
+                        "Routine %s failed to acquired all the locks",
+                        routine.routine_id,
+                    )
+                    return False
+
+        _LOGGER.debug("Routine %s acquired all the locks", routine.routine_id)
+        output_all(
+            _LOGGER,
+            locks=self._lineage_table.locks,
+            lock_queues=self._lineage_table.lock_queues,
+            serialization_order=self._serialization_order,
+        )
+
+        for entity_id, routine_id in locks.items():
+            self._lineage_table.locks[entity_id] = routine_id
+
+        for entity_id, lock_queue in lock_queues.items():
+            self._lineage_table.lock_queues[entity_id] = lock_queue
+
+        return True
+
+    def _attempt_lock(
+        self,
+        action_id: str,
+        entity_id: str,
+        locks: dict[str, str | None],
+        lock_queues: dict[str, Queue[str, ActionInfo]],
+    ) -> bool:
+        """Attempt the lock for the given action."""
+        if entity_id not in lock_queues:
+            raise ValueError(f"Entity {entity_id} has no schedule.")
+        if action_id not in lock_queues[entity_id]:
+            raise ValueError(
+                f"Action {action_id} has not been scheduled on entity {entity_id}."
+            )
+        action_lock = lock_queues[entity_id][action_id]
+        if not action_lock:
+            raise ValueError(
+                f"Action {action_id}'s schedule information on entity {entity_id} is missing."
+            )
+
+        # if there is no routine accessing the lock
+        if not locks[entity_id]:
+            locks[entity_id] = get_routine_id(action_id)
+            action_lock.lock_state = LOCK_STATE_ACQUIRED
+            return True
+
+        # if the routine already access the lock
+        if locks[entity_id] == get_routine_id(action_id):
+            action_lock.lock_state = LOCK_STATE_ACQUIRED
+            return True
+
+        # if another routine is accessing the lock
+        # check if the action can acquire the lock through prelease
+        action_with_lock = self.get_first_action_with_acquired_lock(entity_id)
+        if action_with_lock and get_routine_id(
+            action_with_lock.action_id
+        ) != get_routine_id(action_id):
+            old_idx = lock_queues[entity_id].index(action_with_lock.action_id)
+            new_idx = lock_queues[entity_id].index(action_id)
+
+            prev_action_with_lock = lock_queues[entity_id].prev(
+                action_with_lock.action_id
+            )
+
+            if (
+                new_idx < old_idx
+                and prev_action_with_lock
+                and get_routine_id(prev_action_with_lock.action_id)
+                == get_routine_id(action_id)
+                and action_with_lock.action_state
+                not in (RASC_ACK, RASC_START, RASC_COMPLETE)
+            ):
+                self._prelease_lock(action_with_lock.action_id, entity_id, lock_queues)
+                locks[entity_id] = get_routine_id(action_id)
+
+                action_lock.lock_state = LOCK_STATE_ACQUIRED
+                return True
+
+        # if another routine is accessing the lock
+        # check if the action can acquire the lock through postlease
+        action_with_lock = self.get_last_action_with_acquired_lock(entity_id)
+        if action_with_lock and get_routine_id(
+            action_with_lock.action_id
+        ) != get_routine_id(action_id):
+            old_idx = lock_queues[entity_id].index(action_with_lock.action_id)
+            new_idx = lock_queues[entity_id].index(action_id)
+
+            next_action_with_lock = lock_queues[entity_id].next(
+                action_with_lock.action_id
+            )
+
+            if self._scheduling_policy in (FCFS, FCFS_POST, JIT):
+                if (
+                    new_idx > old_idx
+                    and next_action_with_lock
+                    and get_routine_id(next_action_with_lock.action_id)
+                    == get_routine_id(action_id)
+                    and action_with_lock.action_state in (RASC_START, RASC_COMPLETE)
+                ):
+                    self._postlease_lock(
+                        action_with_lock.action_id, entity_id, lock_queues
+                    )
+                    locks[entity_id] = get_routine_id(action_id)
+                    action_lock.lock_state = LOCK_STATE_ACQUIRED
+                    return True
+
+            elif (
+                new_idx > old_idx
+                and next_action_with_lock
+                and get_routine_id(next_action_with_lock.action_id)
+                == get_routine_id(action_id)
+                # and action_with_lock.action_state in (RASC_START, RASC_COMPLETE)
+            ):
+                self._postlease_lock(action_with_lock.action_id, entity_id, lock_queues)
+                locks[entity_id] = get_routine_id(action_id)
+                action_lock.lock_state = LOCK_STATE_ACQUIRED
+                return True
+
+        _LOGGER.error("Action %s failed to acquired the lock %s", action_id, entity_id)
+        return False
+
+    def _acquire_lock(self, action_id: str, entity_id: str) -> None:
+        """Acquire the lock for the given action in the lock queue."""
+        self._lineage_table.locks[entity_id] = get_routine_id(action_id)
+        self._update_action_lock_state(action_id, entity_id, LOCK_STATE_ACQUIRED)
+
+    def _prelease_lock(
+        self,
+        action_id: str,
+        entity_id: str,
+        lock_queues: dict[str, Queue[str, ActionInfo]],
+    ) -> None:
+        """Prelease the lock from the given action."""
+
+        routine_id = get_routine_id(action_id)
+
+        if entity_id not in lock_queues:
+            raise ValueError(f"Entity {entity_id} has no schedule.")
+        if action_id not in lock_queues[entity_id]:
+            raise ValueError(
+                f"Action {action_id} has not been scheduled on entity {entity_id}."
+            )
+        action_lock = lock_queues[entity_id][action_id]
+        if not action_lock:
+            raise ValueError(
+                f"Action {action_id}'s schedule information on entity {entity_id} is missing."
+            )
+        action_lock.lock_state = LOCK_STATE_LEASED
+
+        next_action = lock_queues[entity_id].next(action_id)
+        while next_action and get_routine_id(next_action.action_id) == routine_id:
+            next_action.lock_state = LOCK_STATE_LEASED
+            next_action = lock_queues[entity_id].next(next_action.action_id)
+
+    def _postlease_lock(
+        self,
+        action_id: str,
+        entity_id: str,
+        lock_queues: dict[str, Queue[str, ActionInfo]],
+    ) -> None:
+        """Postlease the lock from the given action."""
+
+        routine_id = get_routine_id(action_id)
+
+        if entity_id not in lock_queues:
+            raise ValueError(f"Entity {entity_id} has no schedule.")
+        if action_id not in lock_queues[entity_id]:
+            raise ValueError(
+                f"Action {action_id} has not been scheduled on entity {entity_id}."
+            )
+        action_lock = lock_queues[entity_id][action_id]
+        if not action_lock:
+            raise ValueError(
+                f"Action {action_id}'s schedule information on entity {entity_id} is missing."
+            )
+        action_lock.lock_state = LOCK_STATE_RELEASED
+
+        prev_action = lock_queues[entity_id].prev(action_id)
+        while prev_action and get_routine_id(prev_action.action_id) == routine_id:
+            prev_action.lock_state = LOCK_STATE_RELEASED
+            prev_action = lock_queues[entity_id].prev(prev_action.action_id)
+
+    def _release_routine_locks(self, routine: RoutineEntity) -> None:
+        """Release all the locks for the given routine."""
+        for action in list(routine.actions.values())[:-1]:
+            self._release_all_locks(action)
+
+        _LOGGER.debug("Release all locks for the routine %s", routine.routine_id)
+
+    def _release_all_locks(self, action: ActionEntity) -> None:
+        """Release all locks for the given action."""
+        target_entities = get_target_entities(self._hass, action.action)
+        for entity in target_entities:
+            entity_id = get_entity_id_from_number(self._hass, entity)
+            if self._lineage_table.locks[entity_id] == get_routine_id(action.action_id):
+                self._release_lock(entity_id)
+
+    def _release_lock(self, entity_id: str) -> None:
+        """Release the lock for the given entity."""
+        self._lineage_table.locks[entity_id] = None
+
+    def _get_first_action_with_acquired_lock(self, entity_id: str) -> ActionInfo | None:
+        """Get the first action with acquired_lock."""
+        if entity_id not in self._lineage_table.lock_queues:
+            raise ValueError(f"Entity {entity_id} has no schedule.")
+        lock_queue = self._lineage_table.lock_queues[entity_id]
+        return next(
+            (
+                action_info
+                for action_info in lock_queue.values()
+                if action_info and action_info.lock_state == LOCK_STATE_ACQUIRED
+            ),
+            None,
+        )
+
+    def _get_last_action_with_acquired_lock(self, entity_id: str) -> ActionInfo | None:
+        """Get the last action with acquired_lock."""
+        if entity_id not in self._lineage_table.lock_queues:
+            raise ValueError(f"Entity {entity_id} has no schedule.")
+        lock_queue = self._lineage_table.lock_queues[entity_id]
+        return next(
+            (
+                action_info
+                for action_info in reversed(list(lock_queue.values()))
+                if action_info and action_info.lock_state == LOCK_STATE_ACQUIRED
+            ),
+            None,
+        )
+
+    def _remove_scheduled_actions(self, routine_id: str) -> None:
+        """Remove all scheduled actions of the given routine in the lock queues."""
+        for lock_queue in self._lineage_table.lock_queues.values():
+            for action_id, action_info in lock_queue.items():
+                if (
+                    action_info is not None
+                    and action_info.lock_state == LOCK_STATE_SCHEDULED
+                    and routine_id == get_routine_id(action_id)
+                ):
+                    self._hass.data["rasc_events"].append(
+                        (
+                            datetime.now(UTC).strftime("%H:%M:%S.%f")[:-3],
+                            f"Remove {action_id} from schedule",
+                        )
+                    )
+                    lock_queue.pop(action_id)
+
+        _LOGGER.debug("Remove all scheduled actions of the routine %s", routine_id)
+
+    def _eligibility_test(self, routine: RoutineEntity) -> bool:
+        """Eligibility test for the routine."""
+
+        _LOGGER.debug("Start eligibility test for the routine %s", routine.routine_id)
+
+        if not self._scheduler:
+            return False
+
+        # async with self.handle_event_lock:
+        _LOGGER.debug("Start eligibility test for the routine %s", routine.routine_id)
+        if self._scheduling_policy in (FCFS, FCFS_POST, JIT):
+            if isinstance(self._scheduler, TimeLineScheduler):
+                raise TypeError("The scheduler should not be TimeLineScheduler")
+            success, lock_leasing_status = self._scheduler.schedule_routine(
+                self._hass, routine
+            )
+
+            if success:
+                if self._scheduling_policy == FCFS_POST and lock_leasing_status is None:
+                    raise ValueError(
+                        f"Failed to schedule the routine {routine.routine_id}. There should be a lock leasing status."
+                    )
+                self._add_routine_to_serialization_order(routine, lock_leasing_status)  # type: ignore[arg-type]
+                self._acquire_routine_locks(routine)
+                routine_info = self._serialization_order[routine.routine_id]
+                if not routine_info:
+                    raise ValueError(
+                        f"Routine {routine.routine_id} is not found in the serialization order"
+                    )
+                routine_info.pass_eligibility = True
+                _LOGGER.debug(
+                    "Routine %s pass the eligibility test", routine.routine_id
+                )
+                return True
+
+            self._remove_scheduled_actions(routine.routine_id)
+            _LOGGER.warning(
+                "Routine %s failed to pass the eligibility test", routine.routine_id
+            )
+            return False
+
+        # timeline scheduler
+        if not isinstance(self._scheduler, TimeLineScheduler):
+            raise TypeError(
+                "The scheduler should be TimeLineScheduler for the timeline scheduling policy"
+            )
+        (
+            success,
+            lock_leasing_status,
+            _conflict,
+        ) = self._scheduler.schedule_routine_in_case_tl(self._hass, routine)
+        tries = 0
+        while not success:  # pylint: disable=too-many-nested-blocks
+            if tries > 10:
+                raise ValueError(
+                    f"Failed to schedule the routine {routine.routine_id} after {tries} tries"
+                )
+            if (
+                not lock_leasing_status
+                or "next_start_time" not in lock_leasing_status
+                or not lock_leasing_status["next_start_time"]
+            ):
+                raise ValueError(
+                    f"Failed to reschedule the routine {routine.routine_id}. There should be a next start time for rescheduling"
+                )
+
+            self._remove_scheduled_actions(routine.routine_id)
+            # dict_next_start_time = lock_leasing_status["next_start_time"]
+            next_start_time = lock_leasing_status["next_start_time"]
+            # next_start_time = string_to_datetime(lock_leasing_status["next_start_time"])
+            # if conflict:
+            # target_entities = get_routine_targets(self._hass, routine)
+            # for conflict_routine_id in conflict:
+            #     conflict_routine_info = self._serialization_order[
+            #         conflict_routine_id
+            #     ]
+            #     if not conflict_routine_info:
+            #         raise ValueError(
+            #             "Routine %s is not found in the serialization order"
+            #             % conflict_routine_id
+            #         )
+            #     for action in list(conflict_routine_info.routine.actions.values())[
+            #         :-1
+            #     ]:
+            #         conflict_action_targets = set(
+            #             get_target_entities(self._hass, action.action)
+            #         )
+            #         conflicting_entities = target_entities.intersection(
+            #             conflict_action_targets
+            #         )
+            #         for entity in conflicting_entities:
+            #             entity_id = get_entity_id_from_number(self._hass, entity)
+            #             action_lock = self.get_action_info(
+            #                 action.action_id, entity_id
+            #             )
+            #             if not action_lock:
+            #                 raise ValueError(
+            #                     "Action {}'s schedule information on entity {} is missing.".format(
+            #                         action.action_id, entity_id
+            #                     )
+            #                 )
+
+            #            next_start_time = max(next_start_time, action_lock.end_time)
+            # _LOGGER.debug(f"{next_start_time=}")
+            # rescheule the routine
+            (
+                success,
+                lock_leasing_status,
+                _conflict,
+            ) = self._scheduler.schedule_routine_in_case_tl(
+                self._hass,
+                routine,
+                next_start_time,  # type: ignore[arg-type]
+            )
+            tries += 1
+
+        self._add_routine_to_serialization_order(routine, lock_leasing_status)
+        # if self._acquire_routine_locks(routine):
+        routine_info = self._serialization_order[routine.routine_id]
+        if not routine_info:
+            raise ValueError(
+                f"Routine {routine.routine_id} is not found in the serialization order"
+            )
+        routine_info.pass_eligibility = True
+        _LOGGER.debug("Routine %s pass the eligibility test", routine.routine_id)
+
+        output_all(
+            _LOGGER,
+            locks=self._lineage_table.locks,
+            lock_queues=self._lineage_table.lock_queues,
+            free_slots=self._lineage_table.free_slots,
+            serialization_order=self._serialization_order,
+        )
+
+        _LOGGER.debug("Finish eligibility test for the routine %s", routine.routine_id)
+        return True
+
+        # _LOGGER.error(
+        #     "Routine %s failed to pass the eligibility test", routine.routine_id
+        # )
+        # output_all(
+        #     _LOGGER,
+        #     locks=self._lineage_table.locks,
+        #     lock_queues=self._lineage_table.lock_queues,
+        #     free_slots=self._lineage_table.free_slots,
+        #     serialization_order=self._serialization_order,
+        # )
+
+        # return False
+
+    def initialize_routine(self, routine: RoutineEntity) -> None:
+        """Initialize the given routine."""
+        _LOGGER.info("New coming routine %s", routine.routine_id)
+        sink_actions = {
+            action.action_id: get_target_entities(self._hass, action.action)
+            for action in routine.sink_actions
+        }
+        self._metrics.record_routine_arrival(
+            routine.routine_id, datetime.now(UTC), sink_actions
+        )
+
+        if self._eligibility_test(routine):
+            output_all(
+                _LOGGER,
+                locks=self._lineage_table.locks,
+                lock_queues=self._lineage_table.lock_queues,
+                free_slots=self._lineage_table.free_slots,
+                serialization_order=self._serialization_order,
+            )
+
+            self._start_routine(routine)
+        elif self._scheduling_policy not in (TIMELINE):
+            self._add_routine_to_wait_queues(routine)
+
+    def _start_routine(self, routine: RoutineEntity) -> None:
+        """Start the given routine."""
+
+        _LOGGER.info("Start routine %s", routine.routine_id)
+
+        # Start the action that doesn't have the parents
+        for action_entity in list(routine.actions.values())[:-1]:
+            if not action_entity.all_parents:
+                if self.action_start_method == START_TIME_BASED:
+                    self.create_action_task(action_entity)
+                elif self.action_start_method == START_EVENT_BASED:
+                    self._attempt_start_action(action_entity)
+
+    def cancel_action_task(self, action_id: str) -> None:
+        """Cancel the task for the given action."""
+        _LOGGER.debug("Cancel the task for the action %s", action_id)
+        if action_id in self._action_tasks:
+            task = self._action_tasks.pop(action_id)
+            task.cancel()
+
+    def create_action_task(self, action: ActionEntity) -> None:
+        """Create a task for the given action."""
+        if action.action_id in self._action_tasks:
+            task = self._action_tasks.pop(action.action_id)
+            task.cancel()
+        task = self._hass.async_create_task(self._start_action(action))
+        self._action_tasks[action.action_id] = task
+
+    async def _start_action(self, action: ActionEntity) -> None:
+        """Start the given action if action start method is time-based."""
+        _LOGGER.debug("Try to start the action %s", action.action_id)
+
+        target_entities = get_target_entities(self._hass, action.action)
+        if not target_entities:
+            raise ValueError(f"Action {action.action_id} has no target entities.")
+        random_entity_id = target_entities[0]
+        if random_entity_id not in self._lineage_table.lock_queues:
+            raise ValueError(f"Entity {random_entity_id} has no schedule.")
+        if action.action_id not in self._lineage_table.lock_queues[random_entity_id]:
+            return
+        action_lock = self.get_action_info(action.action_id, random_entity_id)
+        if not action_lock:
+            raise ValueError(
+                f"Action {action.action_id}'s schedule information on entity {random_entity_id} is missing."
+            )
+
+        if action.start_requested:
+            _LOGGER.warning("Action %s has already started", action.action_id)
+            return
+
+        while not self._is_action_ready(action):
+            _LOGGER.debug("Action %s is not ready to start", action.action_id)
+            # return
+            prev_start_time = action_lock.start_time
+            action.is_waiting = True
+            await self._async_wait_until_beginning(action.action_id)
+            action.is_waiting = False
+
+            if action.start_requested:
+                # _LOGGER.warning("Action %s has already started", action.action_id)
+                return
+
+            if random_entity_id not in self._lineage_table.lock_queues:
+                raise ValueError(f"Entity {random_entity_id} has no schedule.")
+            lock_queue = self.lineage_table.lock_queues[random_entity_id]
+            if action.action_id not in lock_queue:
+                # _LOGGER.debug("Action %s's routine has already completed", action.action_id)
+                return
+
+            action_lock = lock_queue[action.action_id]
+            if not action_lock:
+                raise ValueError(
+                    f"Action {action.action_id}'s schedule information on entity {random_entity_id} is missing."
+                )
+            if action_lock.start_time < prev_start_time:
+                # _LOGGER.debug("Action %s's routine has already started", action.action_id)
+                return
+
+            if not self._are_prev_actions_over(action):
+                # find the entity where the previous action is not over
+                _LOGGER.debug(
+                    "Action %s's entity's previous actions are not over. Reschedule!",
+                    action.action_id,
+                )
+                for entity in target_entities:
+                    entity_id = get_entity_id_from_number(self._hass, entity)
+                    prev_action_lock = self._lineage_table.lock_queues[entity_id].prev(
+                        action.action_id
+                    )
+                    if not prev_action_lock:
+                        continue
+                    prev_action = prev_action_lock.action
+                    if self._is_action_state(prev_action, entity_id, RASC_COMPLETE):
+                        continue
+                    _LOGGER.debug(
+                        "Reschedule overtime action %s on entity %s",
+                        prev_action.action_id,
+                        entity_id,
+                    )
+                    event_data = {
+                        CONF_TYPE: RASC_INCOMPLETE,
+                        ATTR_ACTION_ID: prev_action.action_id,
+                        ATTR_ENTITY_ID: entity_id,
+                    }
+                    event = Event("", event_data, time_fired=datetime.now(UTC))  # type: ignore[call-arg]
+                    if self._reschedule_handler:
+                        # await self._reschedule_handler(event)
+                        self._reschedule_handler(event)  # type: ignore[arg-type, unused-coroutine]
+            await asyncio.sleep(0.1)
+
+        action.start_requested = True
+        action_lock.action_state = RASC_REQUESTED
+        _LOGGER.debug(
+            "Start action %s at %s vs scheduled start time: %s",
+            action.action_id,
+            datetime.now(UTC),
+            action_lock.start_time,
+        )
+        self._hass.data["rasc_events"].append(
+            (
+                datetime.now(UTC).strftime("%H:%M:%S.%f")[:-3],
+                f"Start {action.action_id}",
+            )
+        )
+        self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
+
+    def _attempt_start_action(self, action: ActionEntity) -> None:
+        """Start the given action if action start method is event-based."""
+        _LOGGER.debug("Try to start the action %s", action.action_id)
+
+        target_entities = get_target_entities(self._hass, action.action)
+        if not target_entities:
+            raise ValueError(f"Action {action.action_id} has no target entities.")
+        random_entity_id = target_entities[0]
+        if random_entity_id not in self._lineage_table.lock_queues:
+            raise ValueError(f"Entity {random_entity_id} has no schedule.")
+        if action.action_id not in self._lineage_table.lock_queues[random_entity_id]:
+            return
+        action_lock = self.get_action_info(action.action_id, random_entity_id)
+        if not action_lock:
+            raise ValueError(
+                f"Action {action.action_id}'s schedule information on entity {random_entity_id} is missing."
+            )
+
+        # async with action.start_lock:
+        if action.start_requested:
+            # _LOGGER.warning("Action %s has already started", action.action_id)
+            return
+
+        _LOGGER.debug(
+            "Start action %s at %s vs scheduled start time: %s",
+            action.action_id,
+            datetime.now(UTC),
+            action_lock.start_time,
+        )
+
+        if not self._is_action_ready(action):
+            _LOGGER.debug("Action %s is not ready to start", action.action_id)
+            return
+
+        now = datetime.now(UTC)
+        if action_lock.start_time.astimezone(UTC) > now:
+            _LOGGER.warning(
+                "Action %s's start time hasn't come. start time: %s, now: %s",
+                action.action_id,
+                datetime_to_string(action_lock.start_time),
+                datetime_to_string(now),
+            )
+
+        # start_st = datetime.now(timezone.utc)
+        for entity in target_entities:
+            entity_id = get_entity_id_from_number(self._hass, entity)
+            # action_info = self.get_action_info(action.action_id, entity_id)
+            # self._return_free_slot(entity_id, action.action_id)
+            # if start_st > action_info.end_time:
+            #     _LOGGER.error(
+            #         "Action %s's new start time %s is after end time %s. Adjust start time to end time.",
+            #         action.action_id,
+            #         datetime_to_string(start_st),
+            #         datetime_to_string(action_info.end_time),
+            #     )
+            # action_info.start_time = start_st
+            # free_slot = self._find_slot_including_time_range(
+            #     self._lineage_table.free_slots[entity_id],
+            #     (action_info.start_time, action_info.end_time),
+            #     entity_id,
+            # )
+            # self.schedule_action(
+            #     free_slot,
+            #     (action_info.start_time, action_info.end_time),
+            #     self._lineage_table.free_slots[entity_id],
+            #     entity_id,
+            # )
+            if self._reschedule_handler:
+                # await self._reschedule_handler(
+                self._reschedule_handler(  # type: ignore[unused-coroutine]
+                    Event(  # type: ignore[call-arg]
+                        "",
+                        {
+                            CONF_TYPE: SCHEDULE_START,
+                            ATTR_ACTION_ID: action.action_id,
+                            ATTR_ENTITY_ID: entity_id,
+                        },
+                        time_fired=datetime.now(UTC),
+                    )
+                )
+
+        action.start_requested = True
+        action_lock.action_state = RASC_REQUESTED
+        self._hass.async_create_task(action.attach_triggered(log_exceptions=False))
+
+    def _is_action_ready(self, action: ActionEntity) -> bool:
+        """Check if the given action acquire all the associated locks to get executed."""
+
+        _LOGGER.debug("Check if action %s is ready", action.action_id)
+        output_all(
+            _LOGGER,
+            locks=self._lineage_table.locks,
+            lock_queues=self._lineage_table.lock_queues,
+        )
+
+        if not self._are_prev_actions_over(action):
+            return False
+
+        # Check if the parent dependencies from the same routine are satisfied
+        if not self._are_parent_deps_satisfied(action):
+            return False
+
+        if self._scheduling_policy in (FCFS, FCFS_POST, JIT):
+            # Check if the action acquires all the locks
+            target_entities = get_target_entities(self._hass, action.action)
+            if any(
+                self._lineage_table.locks[get_entity_id_from_number(self._hass, entity)]
+                != get_routine_id(action.action_id)
+                for entity in target_entities
+            ):
+                _LOGGER.warning(
+                    "Failed to get all the locks for the action %s",
+                    action.action_id,
+                )
+                return False
+
+            # Check if the action reach the start time
+            for entity in target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+
+                action_lock = self.get_action_info(action.action_id, entity_id)
+                if not action_lock:
+                    raise ValueError(
+                        f"Action {action.action_id}'s schedule information on entity {entity_id} is missing."
+                    )
+
+                if action_lock.start_time > datetime.now(UTC):
+                    _LOGGER.warning(
+                        "Action %s's start time %s hasn't come",
+                        action.action_id,
+                        action_lock.start_time,
+                    )
+                    return False
+
+            return True
+
+        # timeline scheduler
+        routine_info = self._serialization_order[get_routine_id(action.action_id)]
+        if not routine_info:
+            raise ValueError(
+                f"Routine {get_routine_id(action.action_id)} is not found in the serialization order"
+            )
+        if not routine_info.pass_eligibility:
+            return False
+
+        if self.action_start_method == START_TIME_BASED:
+            # Check if the action reach the start time
+            target_entities = get_target_entities(self._hass, action.action)
+            for entity in target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+
+                action_lock = self.get_action_info(action.action_id, entity_id)
+                if not action_lock:
+                    raise ValueError(
+                        f"Action {action.action_id}'s schedule information on entity {entity_id} is missing."
+                    )
+                if action_lock.start_time > datetime.now(UTC):
+                    _LOGGER.debug(
+                        "Action %s's start time %s hasn't come",
+                        action.action_id,
+                        action_lock.start_time,
+                    )
+                    return False
+
+        return True
+
+    def _are_prev_routine_over(self, action: ActionEntity) -> bool:
+        """Check if the previous routines on the serialization order are over."""
+        routine_id = get_routine_id(action.action_id)
+        routine_info = self._serialization_order[routine_id]
+        if not routine_info:
+            raise ValueError(
+                f"Routine {routine_id} is not found in the serialization order"
+            )
+        prev_routine = self._serialization_order.prev(routine_id)
+        if not prev_routine:
+            return True
+        return prev_routine.routine_completed  # type: ignore[attr-defined]
+
+    def _are_prev_actions_over(self, action: ActionEntity) -> bool:
+        target_entities = get_target_entities(self._hass, action.action)
+        for entity in target_entities:
+            entity_id = get_entity_id_from_number(self._hass, entity)
+            if entity_id not in self._lineage_table.lock_queues:
+                raise ValueError(f"Entity {entity_id} has no schedule.")
+            prev_action_lock = self._lineage_table.lock_queues[entity_id].prev(
+                action.action_id
+            )
+            if not prev_action_lock:
+                continue
+            prev_action = prev_action_lock.action
+            if not self._is_action_state(prev_action, entity_id, RASC_COMPLETE):
+                return False
+        return True
+
+    def _return_free_slot(self, entity_id: str, action_id: str) -> None:
+        """Return the slot of the action to the free slots."""
+        action_lock = self.get_action_info(action_id, entity_id)
+        if not action_lock:
+            raise ValueError(
+                f"Action {action_id}'s schedule information on entity {entity_id} is missing."
+            )
+        _LOGGER.debug(
+            "before in return free slot, time slot: %s,action_id: %s, action_time, %s-%s,entity_id: %s",
+            self._lineage_table.free_slots[entity_id],
+            action_id,
+            action_lock.start_time,
+            action_lock.end_time,
+            entity_id,
+        )
+        # LOGGER.debug("before return slot %s, action_id: %s, action_time, %s-%s,entity_id: %s", self._lineage_table.free_slots[entity_id], action_id, action_lock.start_time, action_lock.end_time, entity_id)
+        old_action_start, old_action_end = action_lock.time_range
+        key = old_action_start
+        entity_free_slots = self._lineage_table.free_slots[entity_id]
+        for slot_start, slot_end in entity_free_slots.items():
+            if slot_end == old_action_start:
+                key = slot_start
+                break
+        if key not in entity_free_slots and old_action_end not in entity_free_slots:
+            for slot_start in entity_free_slots:
+                if slot_start > old_action_start:
+                    # _LOGGER.debug(
+                    #     "slot_start: %s, old_action_start: %s",
+                    #     slot_start,
+                    #     old_action_start,
+                    # )
+                    entity_free_slots.insert_before(
+                        slot_start, old_action_start, old_action_end
+                    )
+                    break
+                    # entity_free_slots[key] = old_action_end
+        elif key not in entity_free_slots and old_action_end in entity_free_slots:
+            entity_free_slots.insert_before(
+                old_action_end, old_action_start, entity_free_slots[old_action_end]
+            )
+            entity_free_slots.pop(old_action_end)
+        elif key and old_action_end in entity_free_slots:
+            new_val = entity_free_slots[old_action_end]
+            entity_free_slots.updateitem(key, new_val)
+            entity_free_slots.pop(old_action_end)
+        elif old_action_start >= entity_free_slots.end()[0]:  # type: ignore[operator]
+            pass
+        else:
+            entity_free_slots.updateitem(key, old_action_end)
+        _LOGGER.debug(
+            "after in return free slot, time slot: %s,action_id: %s, action_time, %s-%s,entity_id: %s",
+            self._lineage_table.free_slots[entity_id],
+            action_id,
+            action_lock.start_time,
+            action_lock.end_time,
+            entity_id,
+        )
+
+    def _find_slot_including_time_range(
+        self,
+        free_slots: Queue[datetime, datetime],
+        time_range: tuple[datetime, datetime | None],
+        entity_id: str,
+    ) -> tuple[datetime, datetime | None]:
+        """Find the slot in the free slots that includes the given time range."""
+        time_range_end = time_range[1]
+        for st_time, end_time in free_slots.items():
+            if st_time <= time_range[0] and (
+                not end_time or (time_range_end and end_time >= time_range_end)
+            ):
+                return st_time, end_time
+        raise ValueError(
+            f"No free slot found on {entity_id} that includes the given time range. "
+            f"free_slots: {free_slots}, time_range: {time_range_to_string(time_range)}"
+        )
+
+    async def handle_event(self, event: Event) -> None:
+        """Handle event."""
+        async with self.handle_event_lock:
+            event_type: str | None = event.data.get(CONF_TYPE)
+            entity_id: str | None = event.data.get(CONF_ENTITY_ID)
+            action_id: str | None = event.data.get(ATTR_ACTION_ID)
+
+            # Skip the event if the action is manually executed
+            if (
+                not self._serialization_order
+                or not entity_id
+                or not action_id
+                or not event_type
+            ):
+                return
+
+            if event_type == RASC_COMPLETE:
+                self._metrics.record_action_end(datetime.now(UTC), entity_id, action_id)
+
+            if self._reschedule_handler is not None:
+                self.remove_time_slots_before_now(
+                    datetime.now(UTC), self._lineage_table.free_slots
+                )
+                # await self._reschedule_handler(event)
+                self._reschedule_handler(event)  # type: ignore[unused-coroutine]
+
+            _LOGGER.debug("Handling event %s", event)
+
+            # Get the running action in the serialization
+            try:
+                action = self.get_action(action_id)
+            except ValueError:
+                return
+            if not action:
+                return
+
+            should_trigger_fcfs = False
+            should_trigger_jit = False
+
+            if event_type == RASC_ACK:
+                if not self.is_action_ack(action, entity_id):
+                    # update the action state
+                    self._update_action_state(action_id, entity_id, event_type)
+
+                # Check if the action is acknowledged
+                if self._is_all_actions_ack(action) and not action.action_acked:
+                    _LOGGER.debug("Group action %s is acked", action_id)
+
+                    self._set_action_acked(action_id)
+
+                    self._run_next_action(action)
+
+            elif event_type == RASC_START:
+                if not self.is_action_start(action, entity_id):
+                    self._metrics.record_action_start(
+                        datetime.now(UTC), entity_id, action_id
+                    )
+
+                    # update the action state
+                    self._update_action_state(action_id, entity_id, event_type)
+
+                _LOGGER.debug("Action %s on entity %s is started", action_id, entity_id)
+
+                # Check if the action has started
+                if self._is_all_actions_start(action) and not action.action_started:
+                    _LOGGER.debug("Group action %s is started", action_id)
+
+                    self._set_action_started(action_id)
+
+                    self._run_next_action(action)
+
+            elif event_type == RASC_COMPLETE:
+                # Delay the action
+                if action.delay:
+                    await action.async_delay_step()
+
+                # Emulate action's duration
+                # await self._async_wait_until(action_id, entity_id)
+
+                # if entity_id not in self._lineage_table.lock_queues:
+                #     raise ValueError("Entity %s has no schedule." % entity_id)
+                # if action_id not in self._lineage_table.lock_queues[entity_id]:
+                #     return
+
+                if not self.is_action_start(action, entity_id):
+                    _LOGGER.debug(
+                        "Action %s on entity %s is started", action_id, entity_id
+                    )
+
+                if not self.is_action_complete(action, entity_id):
+                    if not self.is_action_start(action, entity_id):
+                        self._metrics.record_action_start(
+                            datetime.now(UTC), entity_id, action_id
+                        )
+                        _LOGGER.debug(
+                            "Action %s on entity %s is started", action_id, entity_id
+                        )
+
+                    # update the action state
+                    self._update_action_state(action_id, entity_id, event_type)
+
+                _LOGGER.debug(
+                    "Action %s on entity %s is completed", action_id, entity_id
+                )
+
+                output_all(_LOGGER, lock_queues=self._lineage_table.lock_queues)
+
+                should_trigger_jit = True
+                if self._scheduling_policy == JIT:
+                    should_trigger_jit = should_trigger_jit and not self._return_lock(
+                        action_id, entity_id
+                    )
+
+                if (
+                    self._scheduling_policy == TIMELINE
+                    and self.action_start_method == START_TIME_BASED
+                ):
+                    self._start_ready_routines_tl(action_id, entity_id)
+
+                # Check if the action is completed on all entities
+                if not action.action_completed and self._is_all_actions_complete(
+                    action
+                ):
+                    _LOGGER.debug(
+                        "All commands in the action %s is completed", action_id
+                    )
+
+                    self._set_action_completed(action_id)
+
+                    should_trigger_fcfs = self._run_next_action(action, True)
+
+            else:
+                output_all(_LOGGER, lock_queues=self._lineage_table.lock_queues)
+
+        if should_trigger_jit:
+            if self._scheduling_policy == FCFS_POST:
+                self._start_ready_routines_fcfs_post(entity_id)
+
+            elif self._scheduling_policy == JIT:
+                self._start_ready_routines_jit(entity_id)
+
+        self._start_ready_actions()
+
+        if self._scheduling_policy == FCFS and should_trigger_fcfs:
+            self._start_ready_routines_fcfs()
+
+    def _start_ready_actions(self) -> None:
+        """Start the ready actions."""
+        for lock_queue in self._lineage_table.lock_queues.values():
+            _, action_lock = lock_queue.top()
+            if action_lock is None:
+                continue
+            action = action_lock.action
+            # async with action.start_lock:
+            if action.start_requested or action_lock.action_state == RASC_REQUESTED:
+                continue
+            if self._is_action_ready(action):
+                self._attempt_start_action(action)
+
+    def _return_lock(self, action_id: str, entity_id: str) -> bool:
+        """Check if the given action returns the lock."""
+        if entity_id not in self._lineage_table.lock_queues:
+            raise ValueError(f"Entity {entity_id} has no schedule.")
+        if action_id not in self._lineage_table.lock_queues[entity_id]:
+            raise ValueError(
+                f"Action {action_id} has not been scheduled on entity {entity_id}."
+            )
+
+        _LOGGER.debug("Action %s returns lock %s", action_id, entity_id)
+        next_action = self._lineage_table.lock_queues[entity_id].next(action_id)
+        if not next_action:
+            return False
+
+        if get_routine_id(next_action.action_id) == get_routine_id(action_id):
+            return False
+
+        if next_action.lock_state != LOCK_STATE_LEASED:
+            return False
+
+        self._postlease_lock(action_id, entity_id, self._lineage_table.lock_queues)
+        self._acquire_lock(next_action.action_id, entity_id)
+
+        cur_action = next_action
+        next_action = self._lineage_table.lock_queues[entity_id].next(
+            next_action.action_id
+        )
+        while next_action and get_routine_id(cur_action.action_id) == get_routine_id(
+            next_action.action_id
+        ):
+            self._acquire_lock(next_action.action_id, entity_id)
+            next_action = self._lineage_table.lock_queues[entity_id].next(
+                next_action.action_id
+            )
+            if not next_action:
+                break
+            _LOGGER.debug(
+                "Action %s returns the lock %s to the action %s",
+                action_id,
+                entity_id,
+                next_action.action_id,
+            )
+
+        output_all(
+            _LOGGER,
+            locks=self._lineage_table.locks,
+            lock_queues=self._lineage_table.lock_queues,
+        )
+
+        if (
+            self._are_parent_deps_satisfied(cur_action.action)
+            and self.action_start_method == START_TIME_BASED
+        ):
+            self.create_action_task(cur_action.action)
+
+        return True
+
+    def _set_action_state(self, action_id: str, state: str) -> None:
+        """Set the action state of the action entity."""
+        routine_info = self._serialization_order.get(get_routine_id(action_id))
+        if not routine_info:
+            raise ValueError(
+                f"Routine {get_routine_id(action_id)} is not in the serialization order."
+            )
+        action = routine_info.routine.actions[action_id]
+        if not action:
+            raise ValueError(f"Action {action_id} is not in the routine script.")
+        if state == RASC_ACK:
+            action.action_acked = True
+        elif state == RASC_START:
+            action.action_acked = True
+            action.action_started = True
+        elif state == RASC_COMPLETE:
+            action.action_acked = True
+            action.action_started = True
+            action.action_completed = True
+
+    def _set_action_acked(self, action_id: str) -> None:
+        """Set the action of the entity acked."""
+        self._set_action_state(action_id, RASC_ACK)
+
+    def _set_action_started(self, action_id: str) -> None:
+        """Set the action of the entity started."""
+        self._set_action_state(action_id, RASC_START)
+
+    def _set_action_completed(self, action_id: str) -> None:
+        """Set the action of the entity completed."""
+        self._set_action_state(action_id, RASC_COMPLETE)
+
+    def _update_action_lock_state(
+        self, action_id: str, entity_id: str, state: str
+    ) -> None:
+        """Update action lock state."""
+        _LOGGER.debug(
+            "Update action %s lock state in entity %s to %s",
+            action_id,
+            entity_id,
+            state,
+        )
+        action = self.get_action_info(action_id, entity_id)
+        if action:
+            action.lock_state = state
+
+    def _update_action_state(
+        self, action_id: str, entity_id: str, new_state: str
+    ) -> None:
+        """Update the action state."""
+        _LOGGER.debug(
+            "Update action %s's running state in entity %s to state %s",
+            action_id,
+            entity_id,
+            new_state,
+        )
+        action = self.get_action_info(action_id, entity_id)
+        if action:
+            action.action_state = new_state
+
+    async def _async_wait_until_beginning(self, action_id: str) -> None:
+        """Wait until the time reaches the end time of the action."""
+
+        action = self.get_action(action_id)
+        if not action:
+            raise ValueError(f"Action {action_id} is not found")
+        target_entities = get_target_entities(self._hass, action.action)
+        random_entity = target_entities[0]
+        entity_id = get_entity_id_from_number(self._hass, random_entity)
+        action_lock = self.get_action_info(action_id, entity_id)
+        if not action_lock:
+            raise ValueError(
+                f"Action {action_id}'s schedule information on entity {entity_id} is missing."
+            )
+        action_start = action_lock.start_time
+        wait_seconds = (action_start - datetime.now(UTC)).total_seconds()
+        _LOGGER.debug("Start the action %s %.2fs later", action_id, wait_seconds)
+
+        start = time.time()
+        if wait_seconds > 0:
+            _LOGGER.debug(
+                "Action %s should start at %s, wait %s s",
+                action_id,
+                action_start,
+                wait_seconds,
+            )
+            await asyncio.sleep(wait_seconds)
+        end = time.time()
+        _LOGGER.debug(
+            "Action %s should start now: %s, after sleeping %s s",
+            action_id,
+            datetime.now(UTC),
+            end - start,
+        )
+
+    async def _async_wait_until(self, action_id: str, entity_id: str) -> None:
+        """Wait until the time reaches the end time of the action."""
+        action = self.get_action_info(action_id, entity_id)
+        if not action:
+            return
+        action_end = action.end_time
+        wait_seconds = (action_end - datetime.now(UTC)).total_seconds()
+
+        if wait_seconds > 0:
+            await asyncio.sleep(wait_seconds)
+
+    def _is_action_state(self, action: ActionEntity, entity: str, state: str) -> bool:
+        """Check if the action is completed."""
+        if action.action_id is None:
+            return False
+        lock_queue = self._lineage_table.lock_queues[
+            get_entity_id_from_number(self._hass, entity)
+        ]
+        if action.action_id not in lock_queue:
+            return True
+        lock = lock_queue[action.action_id]
+        if lock is not None:
+            target = {
+                RASC_ACK: (RASC_ACK, RASC_START, RASC_COMPLETE),
+                RASC_START: (RASC_START, RASC_COMPLETE),
+                RASC_COMPLETE: (RASC_COMPLETE),
+            }
+            if lock.action_state not in target[state]:
+                return False
+        return True
+
+    def is_action_ack(self, action: ActionEntity, entity: str) -> bool:
+        """Check if the action is acked."""
+        return self._is_action_state(action, entity, RASC_ACK)
+
+    def is_action_start(self, action: ActionEntity, entity: str) -> bool:
+        """Check if the action has started."""
+        return self._is_action_state(action, entity, RASC_START)
+
+    def is_action_complete(self, action: ActionEntity, entity: str) -> bool:
+        """Check if the action is completed."""
+        return self._is_action_state(action, entity, RASC_COMPLETE)
+
+    def _is_all_actions_state(self, action: ActionEntity, state: str) -> bool:
+        """Check if the action is at the requested state on all affected entities."""
+        if action.action_id is None:
+            return False
+        for entity in get_target_entities(self._hass, action.action):
+            lock = self._lineage_table.lock_queues[
+                get_entity_id_from_number(self._hass, entity)
+            ][action.action_id]
+            if lock:
+                # _LOGGER.debug(
+                #     "Action %s's state on entity %s is %s - target %s",
+                #     action.action_id,
+                #     entity,
+                #     lock.action_state,
+                #     state,
+                # )
+                if lock.action_state != state:
+                    return False
+        return True
+
+    def _is_all_actions_ack(self, action: ActionEntity) -> bool:
+        return self._is_all_actions_state(action, RASC_ACK)
+
+    def _is_all_actions_start(self, action: ActionEntity) -> bool:
+        return self._is_all_actions_state(action, RASC_START)
+
+    def _is_all_actions_complete(self, action: ActionEntity) -> bool:
+        return self._is_all_actions_state(action, RASC_COMPLETE)
+
+    def _are_parent_deps_satisfied(self, action: ActionEntity) -> bool:
+        """Condition check."""
+        satisfied = True
+        for dependency, parent_set in action.parents.items():
+            if dependency == RASC_ACK:
+                satisfied = all(parent.action_acked for parent in parent_set)
+            elif dependency == RASC_START:
+                satisfied = all(parent.action_started for parent in parent_set)
+            elif dependency == RASC_COMPLETE:
+                satisfied = all(parent.action_completed for parent in parent_set)
+            else:
+                raise ValueError(f"Unknown dependency type {dependency}")
+            if not satisfied:
+                return False
+        return satisfied
+
+    def _run_next_action(self, action: ActionEntity, is_complete: bool = False) -> bool:
+        """Run the entity's next action."""
+        # Start next actions on the same entities
+        if self.action_start_method == START_EVENT_BASED:
+            target_entities = get_target_entities(self._hass, action.action)
+            for entity in target_entities:
+                entity_id = get_entity_id_from_number(self._hass, entity)
+                if entity_id not in self._lineage_table.lock_queues:
+                    raise ValueError(f"Entity {entity_id} has no schedule.")
+                next_action = self._lineage_table.lock_queues[entity_id].next(
+                    action.action_id
+                )
+                if not next_action:
+                    continue
+                self._attempt_start_action(next_action.action)
+
+        # Start next actions in the same routine
+        # This is not the end of the routine
+        for child in action.all_children:
+            if self._are_parent_deps_satisfied(child):
+                if not child.is_end_node:
+                    if self.action_start_method == START_TIME_BASED:
+                        self.create_action_task(child)
+                    elif self.action_start_method == START_EVENT_BASED:
+                        self._attempt_start_action(child)
+                elif is_complete:
+                    self._handle_end_of_routine(get_routine_id(action.action_id))
+                    return True
+        return False
+
+    def _handle_end_of_routine(self, routine_id: str) -> None:
+        """Handle the end of the routine."""
+
+        routine_info = self._serialization_order[routine_id]
+        if not routine_info:
+            raise ValueError("Routine %s is not found in the serialization order")
+        routine = routine_info.routine
+
+        _LOGGER.debug("This is the end of routine '%s' (%s)", routine.name, routine_id)
+
+        self._remove_routine_from_lock_queues(routine)
+        self._release_routine_locks(routine)
+        self._remove_routine_from_serialization_order(routine_id)
+        output_all(_LOGGER, lock_queues=self._lineage_table.lock_queues)
+        self._metrics.save_metrics(final=True)
+
+        self._hass.bus.async_fire("routine_ended", {CONF_ROUTINE_ID: routine_id})
+
+    def _start_ready_routines_fcfs(self) -> None:
+        """Start the ready routine by fcfs."""
+        ready_routines: list[str] = []
+        for routine_id in self._wait_queue:
+            routine_info = self._wait_queue[routine_id]
+            if not routine_info:
+                raise ValueError(f"Routine {routine_id} is not found in the wait queue")
+            routine = routine_info.routine
+            if self._eligibility_test(routine):
+                output_all(
+                    _LOGGER,
+                    locks=self._lineage_table.locks,
+                    lock_queues=self._lineage_table.lock_queues,
+                    free_slots=self._lineage_table.free_slots,
+                    serialization_order=self._serialization_order,
+                )
+                ready_routines.append(routine_id)
+
+        _LOGGER.debug(
+            "Start the ready routines by fcfs, ready routines: %s", ready_routines
+        )
+        for routine_id in ready_routines:
+            routine_info = self._wait_queue[routine_id]
+            if not routine_info:
+                raise ValueError(f"Routine {routine_id} is not found in the wait queue")
+            routine = routine_info.routine
+            self._remove_routine_from_wait_queue(routine_id)
+            self._start_routine(routine)
+
+    def _start_ready_routines_fcfs_post(self, entity_id: str) -> None:
+        """Start the ready routine by fcfs_post."""
+        if self._lock_waitlist.get(entity_id):
+            next_routine_info = self._wait_queue[self._lock_waitlist[entity_id][0]]
+            if not next_routine_info:
+                raise ValueError(
+                    f"Routine {self._lock_waitlist[entity_id][0]} is not found in the wait queue"
+                )
+            next_routine = next_routine_info.routine
+
+            if self._eligibility_test(next_routine):
+                _LOGGER.debug(
+                    "Routine %s passes the eligibility test", next_routine.routine_id
+                )
+                output_all(
+                    _LOGGER,
+                    locks=self._lineage_table.locks,
+                    lock_queues=self._lineage_table.lock_queues,
+                    free_slots=self._lineage_table.free_slots,
+                    serialization_order=self._serialization_order,
+                )
+
+                self._remove_routine_from_wait_queue(next_routine.routine_id)
+                self._start_routine(next_routine)
+
+    def _start_ready_routines_jit(self, entity_id: str) -> None:
+        """Start the ready routine by jit."""
+
+        for next_routine_id in self._lock_waitlist[entity_id]:
+            next_routine_info = self._wait_queue[next_routine_id]
+            if not next_routine_info:
+                raise ValueError(
+                    f"Routine {next_routine_id} is not found in the wait queue"
+                )
+            next_routine = next_routine_info.routine
+
+            if self._eligibility_test(next_routine):
+                _LOGGER.debug("Routine %s passes the eligibility test", next_routine_id)
+                output_all(
+                    _LOGGER,
+                    locks=self._lineage_table.locks,
+                    lock_queues=self._lineage_table.lock_queues,
+                    free_slots=self._lineage_table.free_slots,
+                    serialization_order=self._serialization_order,
+                )
+
+                self._remove_routine_from_wait_queue(next_routine_id)
+                self._start_routine(next_routine)
+                return
+
+            if next_routine_info.ttl > 0:
+                next_routine_info.ttl -= 1
+            else:
+                return
+
+    def _start_ready_routines_tl(self, action_id: str, entity_id: str) -> None:
+        """Test and start the ready routine."""
+        _LOGGER.debug(
+            "Action %s Start the ready routine by timeline scheduling policy", action_id
+        )
+        if entity_id not in self._lineage_table.lock_queues:
+            raise ValueError(f"Entity {entity_id} has no schedule.")
+        if action_id not in self._lineage_table.lock_queues[entity_id]:
+            raise ValueError(
+                f"Action {action_id} has not been scheduled on entity {entity_id}."
+            )
+
+        next_action = self._lineage_table.lock_queues[entity_id].next(action_id)
+
+        if not next_action:
+            return
+
+        condition_pass = self._are_parent_deps_satisfied(next_action.action)
+        if condition_pass and self.action_start_method == START_TIME_BASED:
+            _LOGGER.debug("Action %s is ready to start", next_action.action_id)
+            self.create_action_task(next_action.action)

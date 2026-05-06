@@ -1,8 +1,9 @@
 """Home Assistant trigger dispatcher."""
 
+import importlib
 from typing import cast
 
-from homeassistant.const import CONF_PLATFORM
+from homeassistant.const import CONF_DOMAIN, CONF_PLATFORM
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant
 from homeassistant.helpers.importlib import async_import_module
 from homeassistant.helpers.trigger import (
@@ -21,6 +22,12 @@ async def _async_get_trigger_platform(
         hass, f"homeassistant.components.homeassistant.triggers.{platform_name}"
     )
     return cast(TriggerProtocol, platform)
+
+
+def _get_platform(config: ConfigType) -> TriggerProtocol:
+    return importlib.import_module(
+        f"....components.{config[CONF_DOMAIN]}.device_trigger", __name__
+    )
 
 
 async def async_validate_trigger_config(

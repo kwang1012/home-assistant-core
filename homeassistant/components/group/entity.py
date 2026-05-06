@@ -5,10 +5,15 @@ from collections.abc import Callable, Collection, Mapping
 import logging
 from typing import Any
 
+from homeassistant.components.rasc import rasc_push_event
 from homeassistant.const import (
     ATTR_ASSUMED_STATE,
     ATTR_ENTITY_ID,
     ATTR_GROUP_ENTITIES,
+    ATTR_GROUP_ID,
+    RASC_ACK,
+    RASC_COMPLETE,
+    RASC_START,
     STATE_OFF,
     STATE_ON,
 )
@@ -43,6 +48,48 @@ class GroupEntity(Entity):
 
     _attr_should_poll = False
     _entity_ids: list[str]
+    _action_tracker: dict[str, str] = {}
+    _attr_rasc_state: str = "unknown"
+
+    # rasc
+    @property
+    def rasc_state(self) -> str:
+        """Return rasc state."""
+        return self._attr_rasc_state
+
+    def _preprocessing(self, data: dict[str, Any]) -> None:
+        self._action_tracker = {}
+        self._attr_rasc_state = "unknown"
+        for entity_id in self._entity_ids:
+            self._action_tracker[entity_id] = RASC_ACK
+        data[ATTR_GROUP_ID] = self.unique_id
+
+    async def _handle_rasc_response(self, e: Event) -> None:
+        if e.data.get(ATTR_GROUP_ID) != self.unique_id:
+            return
+        if isinstance(e.data.get(ATTR_ENTITY_ID), list):
+            for entity_id in e.data.get(ATTR_ENTITY_ID, []):
+                await self._update_rasc_state(entity_id, e.data["type"])
+        else:
+            await self._update_rasc_state(e.data[ATTR_ENTITY_ID], e.data["type"])
+
+    @rasc_push_event
+    async def _update_rasc_state(self, entity_id: str, rasc_type: str) -> None:
+        if entity_id in self._action_tracker:
+            self._action_tracker[entity_id] = rasc_type
+        s_cnt = 0
+        c_cnt = 0
+        for state in self._action_tracker.values():
+            if state != RASC_ACK:
+                s_cnt += 1
+            if state == RASC_COMPLETE:
+                c_cnt += 1
+        if c_cnt == len(self._action_tracker):
+            self._action_tracker.clear()
+            self._attr_rasc_state = RASC_COMPLETE
+            return
+        if s_cnt == len(self._action_tracker):
+            self._attr_rasc_state = RASC_START
 
     @callback
     def async_start_preview(

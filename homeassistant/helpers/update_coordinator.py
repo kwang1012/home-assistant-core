@@ -2,7 +2,8 @@
 
 from abc import abstractmethod
 import asyncio
-from collections.abc import Awaitable, Callable, Coroutine, Generator
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable
+import contextlib
 from datetime import datetime, timedelta
 from functools import partial
 import logging
@@ -91,6 +92,7 @@ class DataUpdateCoordinator(BaseDataUpdateCoordinatorProtocol, Generic[_DataT]):
         self.setup_method = setup_method
         self._update_interval_seconds: float | None = None
         self.update_interval = update_interval
+        self.default_update_interval = update_interval
         self._shutdown_requested = False
         if config_entry is UNDEFINED:
             # late import to avoid circular imports
@@ -147,6 +149,18 @@ class DataUpdateCoordinator(BaseDataUpdateCoordinatorProtocol, Generic[_DataT]):
 
         if self.config_entry:
             self.config_entry.async_on_unload(self.async_shutdown)
+
+        # rascal abstraction
+        self.entities: list[entity.Entity] = []
+
+    def add_entities(self, new_entities: Iterable[entity.Entity]) -> None:
+        """Add corresponding entities to coordinator."""
+        for new_entity in new_entities:
+            self.add_entity(new_entity)
+
+    def add_entity(self, new_entity: entity.Entity) -> None:
+        """Add corresponding entity to coordinator."""
+        self.entities.append(new_entity)
 
     async def async_register_shutdown(self) -> None:
         """Register shutdown on HomeAssistant stop.
@@ -579,6 +593,15 @@ class DataUpdateCoordinator(BaseDataUpdateCoordinatorProtocol, Generic[_DataT]):
         ):
             self.async_update_listeners()
 
+    async def track_entity_state(
+        self, _entity: entity.Entity, delay: timedelta | None = None
+    ) -> None:
+        """Track the states of the entity."""
+        if delay:
+            await asyncio.sleep(delay.total_seconds())
+        with contextlib.suppress(Exception):
+            self.data = await self._async_update_data()
+
     @callback
     def _async_refresh_finished(self) -> None:
         """Handle when a refresh has finished.
@@ -614,6 +637,11 @@ class DataUpdateCoordinator(BaseDataUpdateCoordinatorProtocol, Generic[_DataT]):
             self._schedule_refresh()
 
         self.async_update_listeners()
+
+    def _update_polling_interval(self, polling_interval: timedelta | None) -> None:
+        if self.update_interval == polling_interval:
+            return
+        self.update_interval = polling_interval
 
 
 class TimestampDataUpdateCoordinator(DataUpdateCoordinator[_DataT]):
@@ -684,6 +712,7 @@ class CoordinatorEntity[
         Necessary to bind TypeVar to correct scope.
         """
         super().__init__(coordinator, context)
+        coordinator.add_entity(self)
 
     @property
     def available(self) -> bool:

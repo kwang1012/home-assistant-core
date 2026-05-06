@@ -1,5 +1,6 @@
 """Component to interface with locks that can be controlled remotely."""
 
+from collections.abc import Callable
 from datetime import timedelta
 from enum import IntFlag
 import functools as ft
@@ -10,13 +11,18 @@ from typing import TYPE_CHECKING, Any, final
 from propcache.api import cached_property
 import voluptuous as vol
 
+from homeassistant.components.rasc import rasc_target_state
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_CODE,
     ATTR_CODE_FORMAT,
+    CONF_EVENT,
+    CONF_SERVICE,
+    RASC_START,
     SERVICE_LOCK,
     SERVICE_OPEN,
     SERVICE_UNLOCK,
+    Platform,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
@@ -146,6 +152,11 @@ class LockEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
         if code:
             data[ATTR_CODE] = code
         return data
+
+    @cached_property
+    def platform_value(self) -> str:
+        """Return entity platform value."""
+        return Platform.LOCK.value
 
     @cached_property
     def changed_by(self) -> str | None:
@@ -303,3 +314,40 @@ class LockEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
             return
 
         self._lock_option_default_code = ""
+
+    def async_get_action_target_state(
+        self, action: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return expected state when action is complete."""
+
+        def _target_state(
+            target_complete_state: bool,
+        ) -> Callable[[bool], bool]:
+            @rasc_target_state(target_complete_state)
+            def match(value: bool) -> bool:
+                return value == target_complete_state
+
+            return match
+
+        target: dict[str, Any] = {}
+
+        if action[CONF_SERVICE] == SERVICE_UNLOCK:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_locked"] = _target_state(False)
+                target["is_unlocking"] = _target_state(True)
+                target["is_locking"] = _target_state(False)
+            else:
+                target["is_locked"] = _target_state(False)
+                target["is_unlocking"] = _target_state(False)
+                target["is_locking"] = _target_state(False)
+        elif action[CONF_SERVICE] == SERVICE_LOCK:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_locked"] = _target_state(False)
+                target["is_unlocking"] = _target_state(False)
+                target["is_locking"] = _target_state(True)
+            else:
+                target["is_locked"] = _target_state(True)
+                target["is_unlocking"] = _target_state(False)
+                target["is_locking"] = _target_state(False)
+
+        return target

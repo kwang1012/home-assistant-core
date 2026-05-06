@@ -1,0 +1,9 @@
+{
+  "domain": "rpi_device",
+  "name": "Raspberry Pi Device",
+  "codeowners": ["@kwang1012"],
+  "dependencies": ["rasc"],
+  "documentation": "https://www.home-assistant.io/integrations/rpi_device",
+  "iot_class": "local_polling",
+  "quality_scale": "bronze"
+}

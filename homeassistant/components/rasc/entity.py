@@ -1,0 +1,880 @@
+"""Helpers to execute rasc entities."""
+
+import asyncio
+from collections.abc import Iterator, Sequence
+from contextlib import suppress
+from datetime import datetime, timedelta
+import functools
+import json
+import logging
+import time
+from typing import Any, Generic, TypeVar
+
+import voluptuous as vol
+
+from homeassistant import exceptions
+from homeassistant.components.device_automation import action as device_action
+from homeassistant.const import (
+    ATTR_ACTION_ID,
+    CONF_CONTINUE_ON_ERROR,
+    CONF_ENTITY_ID,
+    CONF_RESPONSE_VARIABLE,
+    CONF_SERVICE,
+    CONF_SERVICE_DATA,
+    RASC_ACK,
+    RASC_COMPLETE,
+    RASC_START,
+)
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.helpers import config_validation as cv, service
+from homeassistant.helpers.rascalscheduler import (
+    generate_short_uuid,
+    get_entity_id_from_number,
+    time_range_to_string,
+)
+from homeassistant.util import slugify
+
+from .const import CONF_TRANSITION
+from .log import set_logger
+
+_KT = TypeVar("_KT")
+_VT = TypeVar("_VT")
+_T = TypeVar("_T")
+
+_LOGGER = set_logger("entity")
+_LOG_EXCEPTION = logging.ERROR + 1
+
+TIMEOUT = 3000  # millisecond
+TIME_MILLISECOND = 1000
+
+
+CONF_END_VIRTUAL_NODE = "end_virtual_node"
+CONF_ENTITY_REGISTRY = "entity_registry"
+
+
+class BaseRoutineEntity:
+    """A class that describes routine entities for Rascal Scheduler."""
+
+    def __init__(
+        self,
+        name: str | None,
+        routine_id: str,
+        actions: dict[str, ActionEntity],
+        action_script: Sequence[dict[str, Any]],
+        timeout: float = 1.0,
+    ) -> None:
+        """Initialize a routine entity."""
+        self._name = name
+        self._routine_id = routine_id
+        self.actions = actions
+        self.action_script = action_script
+        self._start_time: float | None = None
+        self._last_trigger_time: float | None = None
+        self._timeout = timeout
+
+    @property
+    def name(self) -> str | None:
+        """Get name."""
+        return self._name
+
+    def duplicate(self, var: dict[str, Any], ctx: Context | None) -> RoutineEntity:
+        """Duplicate the routine entity. Only the base routine can call this function."""
+
+        new_routine_id = self._routine_id + "-" + generate_short_uuid()
+
+        routine_entity = dict[str, ActionEntity]()
+
+        for action_id, entity in self.actions.items():
+            if not entity.is_end_node:
+                new_action_id = new_routine_id + "." + action_id.split(".")[1]
+                routine_entity[new_action_id] = ActionEntity(
+                    hass=entity.hass,
+                    action=entity.action,
+                    action_id=new_action_id,
+                    rts=entity.rts,
+                    stc=entity.stc,
+                    delay=entity.delay,
+                    variables=var,
+                    context=ctx,
+                    logger=entity.logger,
+                )
+
+            else:
+                routine_entity[CONF_END_VIRTUAL_NODE] = ActionEntity(
+                    hass=entity.hass,
+                    action={},
+                    action_id="",
+                    rts=entity.rts,
+                    stc=entity.stc,
+                    is_end_node=True,
+                    logger=entity.logger,
+                )
+
+        for action_id, entity in self.actions.items():
+            if not entity.is_end_node:
+                new_action_id = new_routine_id + "." + action_id.split(".")[1]
+
+                for dependency, parent_set in entity.parents.items():
+                    routine_entity[new_action_id].parents[dependency] = set()
+                    for parent in parent_set:
+                        new_parent_action_id = (
+                            new_routine_id + "." + parent.action_id.split(".")[1]
+                        )
+                        routine_entity[new_action_id].parents[dependency].add(
+                            routine_entity[new_parent_action_id]
+                        )
+
+                for dependency, child_set in entity.children.items():
+                    routine_entity[new_action_id].children[dependency] = set()
+                    for child in child_set:
+                        if not child.is_end_node:
+                            new_child_action_id = (
+                                new_routine_id + "." + child.action_id.split(".")[1]
+                            )
+
+                            routine_entity[new_action_id].children[dependency].add(
+                                routine_entity[new_child_action_id]
+                            )
+                        else:
+                            routine_entity[new_action_id].children[dependency].add(
+                                routine_entity[CONF_END_VIRTUAL_NODE]
+                            )
+            else:
+                for dependency, parent_set in entity.parents.items():
+                    routine_entity[CONF_END_VIRTUAL_NODE].parents[dependency] = set()
+                    for parent in parent_set:
+                        new_parent_action_id = (
+                            new_routine_id + "." + parent.action_id.split(".")[1]
+                        )
+                        routine_entity[CONF_END_VIRTUAL_NODE].parents[dependency].add(
+                            routine_entity[new_parent_action_id]
+                        )
+
+        if not self._last_trigger_time:
+            self._start_time = time.time()
+            self._last_trigger_time = self._start_time
+        else:
+            self._last_trigger_time = self._start_time
+            self._start_time = time.time()
+
+        # self.output(new_routine_id, routine_entity)
+
+        return RoutineEntity(
+            name=self._name,
+            routine_id=new_routine_id,
+            actions=routine_entity,
+            action_script=self.action_script,
+            start_time=self._start_time,
+            last_trigger_time=self._last_trigger_time,
+            logger=_LOGGER,
+        )
+
+    def abort_if_within_timeout(self) -> bool:
+        """Abort if the same routine is trigger frequently."""
+        if not self._last_trigger_time:
+            return False
+
+        return time.time() - self._last_trigger_time < self._timeout
+
+    def output(self, routine_id: str, actions: dict[str, ActionEntity]) -> None:
+        """Print the routine information."""
+        action_list = []
+        for entity in actions.values():
+            parents = [parent.action_id for parent in entity.all_parents]
+            children = [child.action_id for child in entity.all_children]
+
+            entity_json = {
+                "action_id": entity.action_id,
+                "action": entity.action,
+                "action_completed": entity.action_completed,
+                "parents": parents,
+                "children": children,
+                "delay": str(entity.delay),
+                "rts": str(entity.rts),
+                "stc": str(entity.stc),
+            }
+
+            action_list.append(entity_json)
+
+        out = {"routine_id": routine_id, "actions": action_list}
+
+        print(json.dumps(out, indent=2))  # noqa: T201
+
+
+class RoutineEntity(BaseRoutineEntity):
+    """Routine Entity."""
+
+    def __init__(
+        self,
+        name: str | None,
+        routine_id: str,
+        actions: dict[str, ActionEntity],
+        action_script: Sequence[dict[str, Any]],
+        start_time: float | None = None,
+        last_trigger_time: float | None = None,
+        logger: logging.Logger | None = None,
+        log_exceptions: bool = True,
+    ) -> None:
+        """Initialize a routine entity."""
+        super().__init__(name, routine_id, actions, action_script)
+        self._start_time = start_time
+        self._last_trigger_time = last_trigger_time
+        self._set_logger(logger)
+        self._log_exceptions = log_exceptions
+        self._attr_earliest_end_time: datetime
+
+    @property
+    def __dict__(self):
+        """Return dict representation."""
+        return {
+            "name": self.name,
+            "routine_id": self.routine_id,
+            "actions": self.actions,
+            "action_script": self.action_script,
+            "start_time": self.start_time,
+            "last_trigger_time": self._last_trigger_time,
+            "earliest_end_time": self.earliest_end_time,
+        }
+
+    @property
+    def routine_id(self) -> str:
+        """Get routine id."""
+        return self._routine_id
+
+    @property
+    def start_time(self) -> float | None:
+        """Get start time."""
+        return self._start_time
+
+    def _set_logger(self, logger: logging.Logger | None = None) -> None:
+        """Set logger."""
+        if logger:
+            self._logger = logger
+        else:
+            self._logger = logging.getLogger(f"{__name__}.{slugify(self.name)}")
+
+    @property
+    def earliest_end_time(self) -> datetime:
+        """Get earliest end time."""
+        return self._attr_earliest_end_time
+
+    @earliest_end_time.setter
+    def earliest_end_time(self, end_time: datetime) -> None:
+        """Set earliest end time."""
+        self._attr_earliest_end_time = end_time
+
+    @property
+    def source_actions(self) -> list[ActionEntity]:
+        """Get source actions."""
+        return [action for action in self.actions.values() if not action.all_parents]
+
+    @property
+    def sink_actions(self) -> list[ActionEntity]:
+        """Get sink actions."""
+        return [
+            action
+            for action in self.actions.values()
+            if len(action.all_children) == 1
+            and all(child.is_end_node for child in action.all_children)
+        ]
+
+
+class ActionEntity:
+    """Action Entity."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        action: dict[str, Any],
+        action_id: str,
+        rts: dict[str, timedelta],
+        stc: dict[str, timedelta],
+        is_end_node: bool = False,
+        delay: timedelta | None = None,
+        variables: dict[str, Any] | None = None,
+        context: Context | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        """Initialize a routine entity."""
+        self.hass = hass
+        self.action = action
+        self._action_id = action_id
+        self.action_acked = False
+        self.action_started = False
+        self.action_completed = False
+        self.parents: dict[str, set[ActionEntity]] = {
+            RASC_ACK: set[ActionEntity](),
+            RASC_START: set[ActionEntity](),
+            RASC_COMPLETE: set[ActionEntity](),
+        }
+        self.children: dict[str, set[ActionEntity]] = {
+            RASC_ACK: set[ActionEntity](),
+            RASC_START: set[ActionEntity](),
+            RASC_COMPLETE: set[ActionEntity](),
+        }
+        self.rts = rts
+        self.stc = stc
+        self.delay = delay
+        self.variables = variables
+        self.context = context
+        self._log_exceptions = False
+        self._set_logger(logger)
+        self._stop = asyncio.Event()
+        self._attr_is_end_node = is_end_node
+        self.start_requested: bool = False
+        self.is_waiting: bool = False
+        self.start_lock = asyncio.Lock()
+
+    @property
+    def __dict__(self):
+        """Return dict representation."""
+        return {
+            "action": self.action,
+            "action_id": self._action_id,
+            "action_acked": self.action_acked,
+            "action_started": self.action_started,
+            "action_completed": self.action_completed,
+            "rts": self.rts,
+            "stc": self.stc,
+            "delay": self.delay,
+            "variables": self.variables,
+            "context": self.context,
+        }
+
+    def __repr__(self) -> str:
+        """Return the string representation of the action entity."""
+        parents_str = {
+            dependency: {parent.action_id for parent in parent_set}
+            for dependency, parent_set in self.parents.items()
+        }
+        children_str = {
+            dependency: {
+                child.action_id if not child.is_end_node else "end"
+                for child in child_set
+            }
+            for dependency, child_set in self.children.items()
+        }
+        return (
+            f"ActionEntity({self.action_id}, {self.stc}"
+            f"{', end node' if self.is_end_node else ''}"
+            f", parents: {parents_str}"
+            f", children: {children_str})"
+        )
+
+    def __lt__(self, other: ActionEntity) -> bool:
+        """Compare two action entities."""
+        return self.action_id < other.action_id
+
+    @property
+    def action_id(self) -> str:
+        """Get action id."""
+        return self._action_id
+
+    @property
+    def service(self) -> str | None:
+        """Get service."""
+        return self.action.get(CONF_SERVICE, None)
+
+    @property
+    def service_data(self) -> dict[str, Any] | None:
+        """Get service data."""
+        return self.action.get(CONF_SERVICE_DATA, None)
+
+    @property
+    def transition(self) -> float | None:
+        """Get transition."""
+        if self.service_data is None or CONF_TRANSITION not in self.service_data:
+            return None
+        return self.service_data.get(CONF_TRANSITION, None)
+
+    @property
+    def is_end_node(self) -> bool:
+        """Get is_end_node attribute."""
+        return self._attr_is_end_node
+
+    @property
+    def logger(self) -> logging.Logger | None:
+        """Get logger."""
+        return self._logger
+
+    def duplicate(self) -> ActionEntity:
+        """Duplicate the action entity."""
+        new_entity = ActionEntity(
+            hass=self.hass,
+            action=self.action,
+            action_id=self._action_id,
+            rts=self.rts,
+            stc=self.stc,
+            context=self.context,
+            variables=self.variables,
+            logger=self._logger,
+        )
+        new_entity.parents = self.parents
+        new_entity.children = self.children
+        new_entity.is_waiting = self.is_waiting
+        new_entity.start_requested = self.start_requested
+        return new_entity
+
+    @property
+    def all_parents(self) -> set[ActionEntity]:
+        """Get all parents."""
+        all_parents = set()
+        for parent_set in self.parents.values():
+            all_parents.update(parent_set)
+        return all_parents
+
+    @property
+    def all_children(self) -> set[ActionEntity]:
+        """Get all children."""
+        all_children = set()
+        for child_set in self.children.values():
+            all_children.update(child_set)
+        return all_children
+
+    def length(self, entity_id: str) -> timedelta:
+        """Get length for scheduling purposes."""
+        return self.rts[entity_id] + self.stc[entity_id]
+
+    def is_descendant_of(self, action_id: str) -> bool:
+        """Check if the action is a descendant of the current action."""
+        ancestors = self.all_parents.copy()
+        while ancestors:
+            ancestor = ancestors.pop()
+            # _LOGGER.debug(f"is {self.action_id} a descendant of {ancestor.action_id}? {ancestor.action_id == action_id}")
+            if ancestor.action_id == action_id:
+                return True
+            ancestors.update(ancestor.all_parents)
+
+        return False
+
+    def is_descendant_of_any(self, action_ids: set[str]) -> bool:
+        """Check if the action is a descendant of any of the actions."""
+        for action_id in action_ids:
+            if self.is_descendant_of(action_id):
+                _LOGGER.debug("%s is a descendant of %s", self.action_id, action_id)
+                return True
+        return False
+
+    def _set_logger(self, logger: logging.Logger | None = None) -> None:
+        """Set logger."""
+        self._logger = logger
+
+    def _step_log(self, default_message: Any, timeout: Any = None) -> None:
+        """Step log."""
+        _timeout = (
+            "" if timeout is None else f" (timeout: {timedelta(seconds=timeout)})"
+        )
+        self._log("Executing step %s%s", default_message, _timeout, level=logging.DEBUG)  # pylint: disable=protected-access
+
+    def _log(
+        self, msg: str, *args: Any, level: int = logging.INFO, **kwargs: Any
+    ) -> None:
+        """Log."""
+        msg = f"%s: {msg}"
+        args = (str(self.action_id), *args)
+
+        if self._logger:
+            if level == _LOG_EXCEPTION:
+                self._logger.exception(msg, *args, **kwargs)
+            else:
+                self._logger.log(level, msg, *args, **kwargs)
+
+    async def attach_triggered(self, log_exceptions: bool) -> None:
+        """Trigger the function."""
+        action = cv.determine_script_action(self.action)
+        continue_on_error = self.action.get(CONF_CONTINUE_ON_ERROR, False)
+        try:
+            handler = f"_async_{action}_step"
+            await getattr(self, handler)()
+
+        except Exception as ex:  # pylint: disable=broad-except  # noqa: BLE001
+            self._handle_exception(
+                ex, continue_on_error, self._log_exceptions or log_exceptions
+            )
+            _LOGGER.warning("Action %s failed on attach_triggered", self.action_id)
+
+    async def _async_device_step(self) -> None:
+        """Execute device automation."""
+
+        self.action[CONF_ENTITY_ID] = get_entity_id_from_number(
+            self.hass, self.action[CONF_ENTITY_ID]
+        )
+
+        if self._action_id:
+            if not self.variables:
+                self.variables = {}
+            self.variables[ATTR_ACTION_ID] = self._action_id
+
+        if self.variables and self.context is not None:
+            await device_action.async_call_action_from_config(
+                self.hass, self.action, self.variables, self.context
+            )
+
+    async def async_delay_step(self) -> None:
+        """Handle delay."""
+        await self._async_delay_step()
+
+    async def _async_delay_step(self) -> None:
+        """Handle delay."""
+        if self.delay is not None:
+            delay = self.delay
+            self._step_log(f"delay {delay}")
+
+            try:
+                async with asyncio.timeout(delay.total_seconds()):
+                    await self._stop.wait()
+            except TimeoutError:
+                self._step_log("delay completed")
+
+    async def _async_call_service_step(self) -> None:
+        """Call the service specified in the action."""
+        self._step_log("call service")
+        if self.variables is not None:
+            params = service.async_prepare_call_from_config(
+                self.hass, self.action, self.variables
+            )
+
+            params["service_data"]["action_id"] = self._action_id
+            # Validate response data parameters. This check ignores services that do
+            # not exist which will raise an appropriate error in the service call below.
+            response_variable = self.action.get(CONF_RESPONSE_VARIABLE)
+
+            return_response = response_variable is not None
+
+            response_data = await self._async_run_long_action(
+                self.hass.async_create_task(
+                    self.hass.services.async_call(
+                        **params,
+                        blocking=True,
+                        context=self.context,
+                        return_response=return_response,
+                    )
+                ),
+            )
+            if response_variable:
+                self.variables[response_variable] = response_data
+
+    async def _async_run_long_action(self, long_task: asyncio.Task[_T]) -> _T | None:
+        """Run a long task while monitoring for stop request."""
+
+        async def async_cancel_long_task() -> None:
+            # Stop long task and wait for it to finish.
+            long_task.cancel()
+            with suppress(Exception):
+                await long_task
+
+        # Wait for long task while monitoring for a stop request.
+        stop_task = self.hass.async_create_task(self._stop.wait())
+        try:
+            await asyncio.wait(
+                {long_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+        # If our task is cancelled, then cancel long task, too. Note that if long task
+        # is cancelled otherwise the CancelledError exception will not be raised to
+        # here due to the call to asyncio.wait(). Rather we'll check for that below.
+        except asyncio.CancelledError:
+            await async_cancel_long_task()
+            raise
+        finally:
+            stop_task.cancel()
+
+        if long_task.cancelled():
+            raise asyncio.CancelledError
+        if long_task.done():
+            # Propagate any exceptions that occurred.
+            return long_task.result()
+        # Stopped before long task completed, so cancel it.
+        await async_cancel_long_task()
+        return None
+
+    def _handle_exception(
+        self, exception: Exception, continue_on_error: bool, log_exceptions: bool
+    ) -> None:
+        if not isinstance(exception, _HaltScript) and log_exceptions:
+            self._log_exception(exception)
+
+        if not continue_on_error:
+            raise exception
+
+        # An explicit request to stop the script has been raised.
+        if isinstance(exception, _StopScript):
+            raise exception
+
+        # These are incorrect scripts, and not runtime errors that need to
+        # be handled and thus cannot be stopped by `continue_on_error`.
+        if isinstance(
+            exception,
+            (
+                vol.Invalid,
+                exceptions.TemplateError,
+                exceptions.ServiceNotFound,
+                exceptions.InvalidEntityFormatError,
+                exceptions.NoEntitySpecifiedError,
+                exceptions.ConditionError,
+            ),
+        ):
+            raise exception
+
+        # Only Home Assistant errors can be ignored.
+        if not isinstance(exception, exceptions.HomeAssistantError):
+            raise exception
+
+    def _log_exception(self, exception: Exception) -> None:
+        """Log exception."""
+        action_type = cv.determine_script_action(self.action)
+
+        error = str(exception)
+
+        if isinstance(exception, vol.Invalid):
+            error_desc = "Invalid data"
+
+        elif isinstance(exception, exceptions.TemplateError):
+            error_desc = "Error rendering template"
+
+        elif isinstance(exception, exceptions.Unauthorized):
+            error_desc = "Unauthorized"
+
+        elif isinstance(exception, exceptions.ServiceNotFound):
+            error_desc = "Service not found"
+
+        elif isinstance(exception, exceptions.HomeAssistantError):
+            error_desc = "Error"
+
+        else:
+            error_desc = "Unexpected error"
+
+        _LOGGER.warning(
+            "Error executing script. %s for %s at action_id %s: %s",
+            error_desc,
+            action_type,
+            self.action_id,
+            error,
+        )
+
+
+class Queue(Generic[_KT, _VT]):
+    """Representation of a queue for a scheduler with order maintenance."""
+
+    __slots__ = ("_data", "_keys")
+
+    _keys: list[_KT]
+    _data: dict[_KT, _VT | None]
+
+    def __init__(
+        self, queue: dict[_KT, _VT | None] | Queue[_KT, _VT] | None = None
+    ) -> None:
+        """Initialize a queue entity."""
+        self._data = {}
+        self._keys = []
+        if queue:
+            if hasattr(queue, "items"):
+                for key, value in queue.items():
+                    self._keys.append(key)
+                    self._data[key] = value
+            else:
+                raise TypeError(
+                    "The provided queue does not support items() method and cannot be treated as a mapping"
+                )
+
+    def __getitem__(self, key: _KT) -> _VT | None:
+        """Get item."""
+        return self._data[key]
+
+    def __setitem__(self, key: _KT, value: _VT | None) -> None:
+        """Set item."""
+        if key in self._keys:
+            _LOGGER.error("Key %s already in the queue, not appended", key)
+        self._keys.append(key)
+        if isinstance(key, datetime):
+            self._keys = sorted(
+                self._keys,
+                key=functools.cmp_to_key(lambda x, y: (x - y).total_seconds()),  # type: ignore[operator]
+            )
+        self._data[key] = value
+
+    def __delitem__(self, key: _KT) -> None:
+        """Delete item."""
+        del self._data[key]
+        self._keys.remove(key)
+
+    def __iter__(self) -> Iterator[_KT]:
+        """Iterate keys."""
+        return iter(self._keys)
+
+    def __len__(self) -> int:
+        """Get the size of the queue."""
+        return len(self._keys)
+
+    def __contains__(self, key: object) -> bool:
+        """Check if the key contains in the queue."""
+        return key in self._keys
+
+    def keys(self) -> Iterator[_KT]:
+        """Get keys."""
+        yield from self._keys
+
+    def items(self) -> Iterator[tuple[_KT, _VT | None]]:
+        """Get keys and values."""
+        for key in self._keys:
+            yield key, self._data[key]
+
+    def values(self) -> Iterator[_VT | None]:
+        """Get values."""
+        for key in self._keys:
+            yield self._data[key]
+
+    def get(self, key: _KT, default=None) -> _VT | None:
+        """Get the value with the key."""
+        try:
+            return self._data[key]
+        except KeyError:
+            return default
+
+    def getitem(self, index: int) -> _VT | None:
+        """Get item in the index position."""
+        try:
+            key = self._keys[index]
+            return self._data[key]
+        except KeyError as e:
+            raise KeyError("Key does not found while doing getitem.") from e
+
+    def pop(self, key: _KT, default=None) -> _VT | None:
+        """Pop the value according to the key."""
+        value = self.get(key, default)
+        del self._data[key]
+        self._keys.remove(key)
+
+        return value
+
+    def clear(self) -> None:
+        """Clean the queue."""
+        self._keys = []
+        self._data = {}
+
+    def update(self, queue: Queue[_KT, _VT]) -> None:
+        """Extend the queue."""
+        for key, value in queue.items():
+            self._keys.append(key)
+            self._data[key] = value
+
+    def updateitem(self, key: _KT, value: _VT | None) -> None:
+        """Update the item."""
+        try:
+            self._data[key] = value
+        except KeyError as e:
+            raise KeyError("Key does not found while updating item.") from e
+
+    def setdefault(self, key: _KT, default: _VT | None) -> _VT | None:
+        """Return the value of the item with the specified key. If the key does not exist, insert the key with the specified value."""
+        try:
+            return self[key]
+        except KeyError:
+            self[key] = default
+            return self[key]
+
+    def top(self) -> tuple[_KT, _VT | None] | tuple[None, None]:
+        """Get the first item in the queue."""
+        if not self._keys:
+            return None, None
+
+        key = self._keys[0]
+        value = self._data[key]
+        return key, value
+
+    def end(self) -> tuple[_KT, _VT | None] | tuple[None, None]:
+        """Get the last element in the queue."""
+        if not self._keys:
+            return None, None
+
+        key = self._keys[-1]
+        value = self._data[key]
+        return key, value
+
+    def insert_before(self, key: _KT, new_key: _KT, value: _VT | None) -> None:
+        """Insert the new_key before the key with the value."""
+        try:
+            self._keys.insert(self._keys.index(key), new_key)
+            self._data[new_key] = value
+        except ValueError:
+            raise KeyError(key) from ValueError
+
+    def insert_after(self, key: _KT, new_key: _KT, value: _VT | None) -> None:
+        """Insert the new_key after the key with the value."""
+        try:
+            self._keys.insert(self._keys.index(key) + 1, new_key)
+            self._data[new_key] = value
+        except ValueError:
+            raise KeyError(key) from ValueError
+
+    def index(self, key: _KT) -> int:
+        """Return the index of the key."""
+        try:
+            return self._keys.index(key)
+        except Exception as e:
+            raise KeyError("An error occurred while getting the key index.") from e
+
+    def next(self, key: _KT | None) -> _VT | None:
+        """Return the next item with the key."""
+        if key is None:
+            return None
+        index = self._keys.index(key)
+        if index + 1 < len(self._keys):
+            key = self._keys[index + 1]
+            return self._data[key]
+        return None
+
+    def nextitem(self, index: int) -> _VT | None:
+        """Return the next item with the index."""
+        if index + 1 < len(self._keys):
+            key = self._keys[index + 1]
+            return self._data[key]
+        return None
+
+    def prev(self, key: _KT) -> _VT | None:
+        """Return the previous item with the key."""
+        index = self._keys.index(key)
+        if index - 1 >= 0:
+            key = self._keys[index - 1]
+            return self._data[key]
+        return None
+
+    def __repr__(self) -> str:
+        """Return the string representation of the queue."""
+        if self._keys and isinstance(self.top()[0], datetime):
+            text = ", ".join(
+                [time_range_to_string((key, self._data[key])) for key in self._keys]
+            )
+        else:
+            text = ", ".join([f"{key}: {value}" for key, value in self._data.items()])
+        return f"Queue({text})"
+
+    def clone(self) -> Queue[_KT, _VT]:
+        """Return a copy of the queue."""
+        new_queue = Queue[_KT, _VT]()
+        new_queue._keys = self._keys.copy()
+        new_queue._data = self._data.copy()
+        return new_queue
+
+
+class _HaltScript(Exception):
+    """Throw if script needs to stop executing."""
+
+
+class _StopScript(_HaltScript):
+    """Throw if script needs to stop."""
+
+    def __init__(self, message: str, response: Any) -> None:
+        """Initialize a halt exception."""
+        super().__init__(message)
+        self.response = response
+
+    # def timeout(self)->bool:
+    #     """Check if the routine exceeds the timeout."""
+    #     now = time.time()
+    #     last_trigger_time = self._last_trigger_time
+    #     timeout = self._timeout
+
+    #     if last_trigger_time is None or (now - last_trigger_time) * TIME_MILLISECOND > timeout:
+    #         return False
+
+    #     return True

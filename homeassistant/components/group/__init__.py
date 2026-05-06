@@ -9,12 +9,18 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    ATTR_ENTITY_ID,  # noqa: F401
     ATTR_ICON,
     ATTR_NAME,
     CONF_ENTITIES,
+    CONF_EVENT as CONF_EVENT,
     CONF_ICON,
     CONF_NAME,
+    ENTITY_MATCH_ALL as ENTITY_MATCH_ALL,
+    ENTITY_MATCH_NONE as ENTITY_MATCH_NONE,
+    RASC_ACK as RASC_ACK,
+    RASC_COMPLETE as RASC_COMPLETE,
+    RASC_RESPONSE as RASC_RESPONSE,
+    RASC_START as RASC_START,
     SERVICE_RELOAD,
     Platform,
 )

@@ -174,6 +174,7 @@ class LightGroup(GroupEntity, LightEntity):
             key: value for key, value in kwargs.items() if key in FORWARDED_ATTRIBUTES
         }
         data[ATTR_ENTITY_ID] = self._entity_ids
+        self._preprocessing(data)
 
         _LOGGER.debug("Forwarded turn_on command: %s", data)
 
@@ -191,6 +192,7 @@ class LightGroup(GroupEntity, LightEntity):
 
         if ATTR_TRANSITION in kwargs:
             data[ATTR_TRANSITION] = kwargs[ATTR_TRANSITION]
+        self._preprocessing(data)
 
         await self.hass.services.async_call(
             light.DOMAIN,

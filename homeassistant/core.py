@@ -54,6 +54,7 @@ from .const import (
     COMPRESSED_STATE_LAST_CHANGED,
     COMPRESSED_STATE_LAST_UPDATED,
     COMPRESSED_STATE_STATE,
+    DOMAIN_RASC,
     EVENT_CALL_SERVICE,
     EVENT_CORE_CONFIG_UPDATE,
     EVENT_HOMEASSISTANT_CLOSE,
@@ -104,6 +105,7 @@ from .util.ulid import ulid_at_time, ulid_now
 if TYPE_CHECKING:
     from .auth import AuthManager
     from .components.http import HomeAssistantHTTP
+    from .components.rasc import RASCAbstraction
     from .config_entries import ConfigEntries
     from .helpers.entity import StateInfo
 
@@ -2717,6 +2719,41 @@ class ServiceRegistry:
             self._hass.loop,
         ).result()
 
+    def rasc_call(
+        self,
+        domain: str,
+        service: str,
+        service_data: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> tuple[
+        asyncio.Task[ServiceResponse],
+        asyncio.Task[ServiceResponse],
+        asyncio.Task[ServiceResponse],
+    ]:
+        """Call a service with rasc abstraction."""
+        context = Context()
+        service_data = service_data or {}
+
+        try:
+            handler = self._services[domain][service]
+        except KeyError:
+            domain = domain.lower()
+            service = service.lower()
+            try:
+                handler = self._services[domain][service]
+            except KeyError:
+                raise ServiceNotFound(domain, service) from None
+
+        processed_data = service_data
+        if config is not None:
+            processed_data.update(config)
+
+        service_call = ServiceCall(self._hass, domain, service, processed_data, context)
+
+        rasc: RASCAbstraction = self._hass.data[DOMAIN_RASC]
+        coro, s_coro, c_coro = rasc.execute_service(handler, service_call)
+        return coro, s_coro, c_coro
+
     async def async_call(
         self,
         domain: str,
@@ -2799,6 +2836,7 @@ class ServiceRegistry:
         else:
             processed_data = service_data
 
+        processed_data = {**processed_data, **processed_data.get("params", {})}
         service_call = ServiceCall(
             self._hass, domain, service, processed_data, context, return_response
         )
@@ -2812,6 +2850,13 @@ class ServiceRegistry:
             },
             context=context,
         )
+
+        if DOMAIN_RASC in self._hass.data:
+            rasc: RASCAbstraction = self._hass.data[DOMAIN_RASC]
+            a_coro, s_coro, c_coro = rasc.execute_service(handler, service_call)
+            s_coro.add_done_callback(lambda _: None)
+            c_coro.add_done_callback(lambda _: None)
+            return await a_coro
 
         coro = self._execute_service(handler, service_call)
         if not blocking:

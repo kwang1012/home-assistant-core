@@ -34,6 +34,7 @@ infrared-protocols==2.1.0
 Jinja2==3.1.6
 lru-dict==1.4.1
 mutagen==1.47.0
+numdifftools>=0.9.42
 orjson==3.11.8
 packaging>=23.1
 Pillow==12.2.0

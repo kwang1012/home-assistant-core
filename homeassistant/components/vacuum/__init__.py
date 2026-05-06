@@ -1,7 +1,7 @@
 """Support for vacuum cleaner robots (botvacs)."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
@@ -11,10 +11,14 @@ from typing import Any, final
 from propcache.api import cached_property
 import voluptuous as vol
 
+from homeassistant.components.rasc import rasc_target_state
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (  # noqa: F401 # STATE_PAUSED/IDLE are API
     ATTR_BATTERY_LEVEL,
     ATTR_COMMAND,
+    CONF_EVENT,
+    CONF_SERVICE,
+    RASC_START,
     SERVICE_TOGGLE,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
@@ -36,6 +40,8 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import DATA_COMPONENT, DOMAIN, VacuumActivity, VacuumEntityFeature
 from .websocket import async_register_websocket_handlers
+
+ACTION_TYPES = {"clean", "dock"}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -624,3 +630,37 @@ class Segment:
     id: str
     name: str
     group: str | None = None
+
+    def async_get_action_target_state(
+        self, action: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return expected state when action is complete."""
+
+        def _target_state(
+            target_complete_state: bool | str,
+        ) -> Callable[[bool | str], bool]:
+            @rasc_target_state(target_complete_state)
+            def match(value: bool | str) -> bool:
+                return value == target_complete_state
+
+            return match
+
+        target: dict[str, Any] = {}
+
+        if action[CONF_SERVICE] == SERVICE_START:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_cleaning"] = _target_state(True)
+            else:
+                target["is_cleaning"] = _target_state(False)
+                target["is_clean"] = _target_state(True)
+                target["status"] = _target_state("")
+
+        elif action[CONF_SERVICE] == SERVICE_STOP:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_returning"] = _target_state(True)
+            else:
+                target["is_returning"] = _target_state(False)
+                target["docked"] = _target_state(True)
+                target["status"] = _target_state("docked")
+
+        return target

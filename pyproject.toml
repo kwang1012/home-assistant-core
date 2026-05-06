@@ -81,6 +81,7 @@ dependencies = [
   "yarl==1.23.0",
   "webrtc-models==0.3.0",
   "zeroconf==0.148.0",
+  "numdifftools>=0.9.42",
 ]
 
 [project.urls]
@@ -918,6 +919,10 @@ split-on-trailing-comma = false
 # Temporary
 "homeassistant/**" = ["PTH"]
 "tests/**" = ["PTH"]
+
+# RASC dataset utility scripts (standalone, not HA integration code)
+"homeassistant/components/rasc/datasets/*" = ["D100", "D103", "INP001", "PLW0603", "SIM113", "T201"]
+"homeassistant/components/rasc/datasets/*.ipynb" = ["D100", "D103", "INP001", "PLW0603", "SIM113"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 25

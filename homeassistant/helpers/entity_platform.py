@@ -42,6 +42,7 @@ from .entity_registry import EntityRegistry, RegistryEntryDisabler, RegistryEntr
 from .event import async_call_later
 from .frame import report_usage
 from .issue_registry import IssueSeverity, async_create_issue
+from .rascalscheduler import add_entity_in_lineage
 from .typing import UNDEFINED, ConfigType, DiscoveryInfoType, VolDictType, VolSchemaType
 
 if TYPE_CHECKING:
@@ -989,6 +990,8 @@ class EntityPlatform:
         self.domain_entities[entity_id] = entity
         self.domain_platform_entities[entity_id] = entity
 
+        add_entity_in_lineage(self.hass, entity_id)
+
         if not restored:
             # Reserve the state in the state machine
             # because as soon as we return control to the event
@@ -1122,10 +1125,11 @@ class EntityPlatform:
             self._process_updates = asyncio.Lock()
         if self._process_updates.locked():
             self.logger.warning(
-                "Updating %s %s took longer than the scheduled update interval %s",
+                "Updating %s %s took longer than the scheduled update interval %s. Entities: %s",
                 self.platform_name,
                 self.domain,
                 self.scan_interval,
+                self.entities,
             )
             return
 
@@ -1139,7 +1143,6 @@ class EntityPlatform:
                     # entity.
                     if entity.should_poll and entity.hass:
                         await entity.async_update_ha_state(True)
-                return
 
             if tasks := [
                 create_eager_task(
@@ -1230,6 +1233,21 @@ class EntityPlatform:
         Will be removed in Home Assistant Core 2026.8.
         """
         return await self.platform_data.async_load_translations()
+
+    async def track_entity_state(
+        self, entity: Entity, delay: timedelta | None = None
+    ) -> None:
+        """Track the states of the entity."""
+        if delay:
+            await asyncio.sleep(delay.total_seconds())
+        if self._process_updates is None:
+            self._process_updates = asyncio.Lock()
+        if self._process_updates.locked():
+            return
+
+        async with self._process_updates:
+            if entity.should_poll and entity.hass:
+                await entity.async_update_ha_state(True)
 
 
 @overload

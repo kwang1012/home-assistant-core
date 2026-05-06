@@ -141,6 +141,7 @@ CONF_FOR_EACH: Final = "for_each"
 CONF_FORCE_UPDATE: Final = "force_update"
 CONF_FRIENDLY_NAME: Final = "friendly_name"
 CONF_FRIENDLY_NAME_TEMPLATE: Final = "friendly_name_template"
+CONF_GROUP_ID: Final = "group_id"
 CONF_HEADERS: Final = "headers"
 CONF_HOST: Final = "host"
 CONF_HOSTS: Final = "hosts"
@@ -335,6 +336,14 @@ ATTR_GROUP_ENTITIES: Final = "group_entities"
 
 # Contains one string, the config entry ID
 ATTR_CONFIG_ENTRY_ID: Final = "config_entry_id"
+
+# Contains one string or a list of strings, each being an entity id
+ATTR_GROUP_ID: Final = "group_id"
+
+ATTR_CONTEXT_ID: Final = "context_id"
+
+# Contains one string or a list of strings, each being an entity id
+ATTR_ACTION_ID: Final = "action_id"
 
 # Contains one string or a list of strings, each being an area id
 ATTR_AREA_ID: Final = "area_id"
@@ -995,3 +1004,116 @@ FORMAT_DATETIME: Final = f"{FORMAT_DATE} {FORMAT_TIME}"
 # This is not a hard limit, but caches and other
 # data structures will be pre-allocated to this size
 MAX_EXPECTED_ENTITY_IDS: Final = 16384
+
+
+RASC_REQUESTED = "requested"
+RASC_ACK = "ack"
+RASC_START = "start"
+RASC_COMPLETE = "complete"
+RASC_RESPONSE = "rasc_response"
+RASC_SCHEDULED = "scheduled"
+RASC_INCOMPLETE = "not_complete"
+SCHEDULE_START = "schedule_start"
+DOMAIN_RASCALSCHEDULER: Final = "rascal_scheduler"
+DOMAIN_RASCALRESCHEDULER: Final = "rascal_rescheduler"
+DOMAIN_RASC: Final = "rasc"
+
+DOMAIN_AUTOMATION: Final = "automation"
+DOMAIN_SCRIPT: Final = "script"
+DOMAIN_PERSON: Final = "person"
+DOMAIN_ZONE: Final = "zone"
+DOMAIN_SENSOR: Final = "sensor"
+DOMAIN_TTS: Final = "tts"
+
+NAME_SUN_NEXT_DAWN: Final = "sun_next_dawn"
+NAME_SUN_NEXT_DUSK: Final = "sun_next_dusk"
+NAME_SUN_NEXT_MIDNIGHT: Final = "sun_next_midnight"
+NAME_SUN_NEXT_NOON: Final = "sun_next_noon"
+NAME_SUN_NEXT_RISING: Final = "sun_next_rising"
+NAME_SUN_NEXT_SETTING: Final = "sun_next_setting"
+
+
+LOCK_STATE_SCHEDULED: Final = "scheduled"
+LOCK_STATE_ACQUIRED: Final = "acquired"
+LOCK_STATE_RELEASED: Final = "released"
+LOCK_STATE_LEASED: Final = "leased"
+
+
+CONF_DEPEND_ON: Final = "depend_on"
+
+FCFS: Final = "fcfs"
+FCFS_POST: Final = "fcfs_post"
+JIT: Final = "jit"
+TIMELINE: Final = "tl"
+CONF_SCHEDULING_POLICY: Final = "scheduling_policy"
+CONF_USE_VOPT: Final = "use_vopt"
+
+
+CONF_RESCHEDULING_POLICY: Final = "rescheduling_policy"
+OPTIMALW: Final = "optimalw"
+OPTIMALWO: Final = "optimalwo"
+RV: Final = "rv"
+EARLY_START: Final = "early_start"
+SJFWO: Final = "sjfwo"
+SJFW: Final = "sjfw"
+NONE: Final = "none"
+
+CONF_RESCHEDULING_TRIGGER: Final = "rescheduling_trigger"
+REACTIVE: Final = "reactive"
+ANTICIPATORY: Final = "anticipatory"
+PROACTIVE: Final = "proactive"
+
+CONF_RESCHEDULING_WINDOW: Final = "rescheduling_window"
+
+CONF_ROUTINE_PRIORITY_POLICY: Final = "routine_priority_policy"
+SHORTEST: Final = "shortest"
+LONGEST: Final = "longest"
+EARLIEST: Final = "earliest"
+LATEST: Final = "latest"
+RANDOM: Final = "random"
+
+CONF_OPTIMAL_SCHEDULE_METRIC: Final = "optimal_schedule_metric"
+MIN_LENGTH: Final = "min_length"
+MIN_AVG_RTN_WAIT_TIME: Final = "min_avg_rtn_wait_time"
+MIN_P95_RTN_WAIT_TIME: Final = "min_p95_rtn_wait_time"
+MIN_AVG_RTN_LATENCY: Final = "min_avg_rtn_latency"
+MIN_P95_RTN_LATENCY: Final = "min_p95_rtn_latency"
+MIN_RTN_EXEC_TIME_STD_DEV: Final = "min_rtn_exec_time_std_dev"
+MIN_AVG_IDLE_TIME: Final = "min_avg_idle_time"
+MIN_P95_IDLE_TIME: Final = "min_p95_idle_time"
+MAX_AVG_PARALLELISM: Final = "max_avg_parallelism"
+MAX_P05_PARALLELISM: Final = "max_p05_parallelism"
+
+CONF_ROUTINE_ARRIVAL_FILENAME: Final = "routine_arrival_filename"
+CONF_RECORD_RESULTS: Final = "record_results"
+
+RESCHEDULING_ESTIMATION: Final = "rescheduling_estimation"
+
+RESCHEDULING_ACCURACY: Final = "rescheduling_accuracy"
+RESCHEDULE_ALL: Final = "reschedule_all"
+RESCHEDULE_SOME: Final = "reschedule_some"
+
+HOLE_FILLING_METRIC: Final = "hole_filling_metric"
+LOCAL_FIRST: Final = "local_first"
+LOCAL_SHORTEST: Final = "local_shortest"
+LOCAL_LONGEST: Final = "local_longest"
+GLOBAL_FIRST: Final = "global_first"
+GLOBAL_SHORTEST: Final = "global_shortest"
+GLOBAL_LONGEST: Final = "global_longest"
+
+TIMELINE_UNIT: Final = 1
+
+OVERHEAD_MEASUREMENT: Final = "overhead_measurement"
+ACTION_LENGTH_ESTIMATION: Final = "action_length_estimation"
+MEAN_ESTIMATION: Final = "mean"
+P50_ESTIMATION: Final = "p50"
+P70_ESTIMATION: Final = "p70"
+P80_ESTIMATION: Final = "p80"
+P90_ESTIMATION: Final = "p90"
+P95_ESTIMATION: Final = "p95"
+P99_ESTIMATION: Final = "p99"
+DO_COMPARISON: Final = "do_comparison"
+
+CONF_ACTION_START_METHOD: Final = "action_start_method"
+START_EVENT_BASED: Final = "event"
+START_TIME_BASED: Final = "time"

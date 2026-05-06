@@ -27,10 +27,12 @@ import voluptuous as vol
 import voluptuous_serialize
 
 from homeassistant.const import (
+    ATTR_ACTION_ID,
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
     ATTR_FLOOR_ID,
+    ATTR_GROUP_ID,
     ATTR_LABEL_ID,
     CONF_ABOVE,
     CONF_ACTION,
@@ -1331,6 +1333,8 @@ ENTITY_SERVICE_FIELDS: VolDictType = {
         ENTITY_MATCH_NONE,
         vol.All(ensure_list, [str]),
     ),
+    vol.Optional(ATTR_GROUP_ID): str,
+    vol.Optional(ATTR_ACTION_ID): vol.Any(str, None),
 }
 
 TARGET_SERVICE_FIELDS: VolDictType = {
@@ -1510,6 +1514,7 @@ SERVICE_SCHEMA = vol.All(
                 _TARGET_SERVICE_FIELDS_TEMPLATED, dynamic_template
             ),
             vol.Optional(CONF_RESPONSE_VARIABLE): str,
+            vol.Optional("depend_on"): vol.Any(str, list[str]),
             # The frontend stores data here. Don't use in core.
             vol.Remove("metadata"): dict,
         }
@@ -1911,6 +1916,7 @@ DEVICE_ACTION_BASE_SCHEMA = vol.Schema(
         **SCRIPT_ACTION_BASE_SCHEMA,
         vol.Required(CONF_DEVICE_ID): string,
         vol.Required(CONF_DOMAIN): str,
+        vol.Optional("depend_on"): vol.Any(str, list[str]),
         vol.Remove("metadata"): dict,
     }
 )

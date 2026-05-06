@@ -7,6 +7,7 @@ from aiohue.v2.controllers.events import EventType
 from aiohue.v2.models.resource import ResourceTypes
 from aiohue.v2.models.zigbee_connectivity import ConnectivityServiceStatus
 
+from homeassistant.components.rasc import rasc_push_event
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -120,6 +121,7 @@ class HueBaseEntity(Entity):  # pylint: disable=hass-enforce-class-module
         """Call on update event."""
         # used in subclasses
 
+    @rasc_push_event
     @callback
     def _handle_event(self, event_type: EventType, resource: HueResource) -> None:
         """Handle status event for this resource (or it's parent)."""

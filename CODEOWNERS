@@ -1442,6 +1442,7 @@ CLAUDE.md @home-assistant/core
 /tests/components/random/ @fabaff
 /homeassistant/components/rapt_ble/ @sairon
 /tests/components/rapt_ble/ @sairon
+/homeassistant/components/rasc/ @kwang1012
 /homeassistant/components/raspberry_pi/ @home-assistant/core
 /tests/components/raspberry_pi/ @home-assistant/core
 /homeassistant/components/rdw/ @frenck @joostlek
@@ -1501,6 +1502,7 @@ CLAUDE.md @home-assistant/core
 /tests/components/roon/ @pavoni
 /homeassistant/components/route_b_smart_meter/ @SeraphicRav
 /tests/components/route_b_smart_meter/ @SeraphicRav
+/homeassistant/components/rpi_device/ @kwang1012
 /homeassistant/components/rpi_power/ @shenxn @swetoast
 /tests/components/rpi_power/ @shenxn @swetoast
 /homeassistant/components/rss_feed_template/ @home-assistant/core
@@ -1913,6 +1915,7 @@ CLAUDE.md @home-assistant/core
 /tests/components/victron_remote_monitoring/ @AndyTempel
 /homeassistant/components/vilfo/ @ManneW
 /tests/components/vilfo/ @ManneW
+/homeassistant/components/virtual/ @twrecked
 /homeassistant/components/vivotek/ @HarlemSquirrel
 /tests/components/vivotek/ @HarlemSquirrel
 /homeassistant/components/vizio/ @raman325

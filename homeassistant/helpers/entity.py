@@ -30,7 +30,11 @@ from homeassistant.const import (
     ATTR_ICON,
     ATTR_SUPPORTED_FEATURES,
     ATTR_UNIT_OF_MEASUREMENT,
+    CONF_SERVICE,
     DEVICE_DEFAULT_NAME,
+    SERVICE_TOGGLE,
+    SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
@@ -608,6 +612,11 @@ class Entity(
                 getattr(self, function_name)
             )
         return self._job_types[function_name]
+
+    @cached_property
+    def platform_value(self) -> str | None:
+        """Return entity platform value."""
+        return None
 
     @cached_property
     def should_poll(self) -> bool:
@@ -1707,6 +1716,26 @@ class Entity(
             self.hass, integration_domain=platform_name, module=type(self).__module__
         )
 
+    @property
+    def get_current_state(self) -> dict[str, Any]:
+        """Return the current state of the entity."""
+        raise NotImplementedError
+
+    def async_get_action_target_state(
+        self, action: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return expected state when action is complete."""
+        raise NotImplementedError
+
+    def get_action_complete_percentage(
+        self, request_state: dict[str, Any], action: dict[str, Any]
+    ) -> float:
+        """Return the percentage of completion of an action.
+
+        None is unknown, 0 is not started, 1 is complete.
+        """
+        raise NotImplementedError
+
 
 class ToggleEntityDescription(EntityDescription, frozen_or_thawed=True):
     """A class that describes toggle entities."""
@@ -1771,3 +1800,45 @@ class ToggleEntity(
             await self.async_turn_off(**kwargs)
         else:
             await self.async_turn_on(**kwargs)
+
+    @property
+    def get_current_state(self) -> dict[str, Any]:
+        """Return the current state of the entity."""
+        return {"state": self.state, "is_on": self.is_on}
+
+    def async_get_action_target_state(
+        self, action: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return expected state of an action."""
+
+        def _target_complete_state(current: bool) -> Callable[[bool], bool]:
+            def match(value: bool) -> bool:
+                return value == current
+
+            return match
+
+        target: dict[str, Any] = {}
+        if action[CONF_SERVICE] == SERVICE_TURN_ON:
+            target["is_on"] = _target_complete_state(True)
+        elif action[CONF_SERVICE] == SERVICE_TURN_OFF:
+            target["is_on"] = _target_complete_state(False)
+        elif action[CONF_SERVICE] == SERVICE_TOGGLE:
+            target["is_on"] = _target_complete_state(not self.is_on)
+        return target
+
+    def get_action_complete_percentage(
+        self, request_state: dict[str, Any], action: dict[str, Any]
+    ) -> float:
+        """Return the percentage of completion of an action.
+
+        None is unknown, 0 is not started, 1 is complete.
+        """
+        if CONF_SERVICE not in action:
+            return 0.0
+        if action[CONF_SERVICE] == SERVICE_TURN_ON:
+            return 1.0 if self.is_on else 0.0
+        if action[CONF_SERVICE] == SERVICE_TURN_OFF:
+            return 1.0 if not self.is_on else 0.0
+        if action[CONF_SERVICE] == SERVICE_TOGGLE:
+            return 0.0 if self.is_on == request_state["is_on"] else 1.0
+        return 0.0

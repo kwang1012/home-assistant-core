@@ -7,12 +7,17 @@ from typing import Any, Self
 
 import voluptuous as vol
 
+from homeassistant.components.rasc import rasc_target_state
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_EDITABLE,
     ATTR_ENTITY_ID,
+    CONF_EVENT,
     CONF_ICON,
     CONF_ID,
     CONF_NAME,
+    CONF_SERVICE,
+    RASC_START,
     SERVICE_RELOAD,
 )
 from homeassistant.core import HomeAssistant, ServiceCall, callback
@@ -109,7 +114,8 @@ RELOAD_SERVICE_SCHEMA = vol.Schema({})
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up an input select."""
-    component = EntityComponent[Timer](_LOGGER, DOMAIN, hass)
+
+    hass.data[DOMAIN] = component = EntityComponent[Timer](_LOGGER, DOMAIN, hass)
     id_manager = collection.IDManager()
 
     yaml_collection = collection.YamlCollection(
@@ -152,7 +158,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     )
     component.async_register_entity_service(
         SERVICE_START,
-        {vol.Optional(ATTR_DURATION, default=DEFAULT_DURATION): cv.time_period},
+        {
+            vol.Optional(ATTR_DURATION, default=DEFAULT_DURATION): cv.time_period,
+            vol.Optional("type"): cv.string,
+        },
         "async_start",
     )
     component.async_register_entity_service(SERVICE_PAUSE, None, "async_pause")
@@ -165,6 +174,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     )
 
     return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up a config entry."""
+    component: EntityComponent[Timer] = hass.data[DOMAIN]
+
+    return await component.async_setup_entry(entry)
 
 
 class TimerStorageCollection(collection.DictStorageCollection):
@@ -441,3 +457,27 @@ class Timer(collection.CollectionEntity, RestoreEntity):
         if extra_attrs:
             event_data.update(extra_attrs)
         self.hass.bus.async_fire(event, event_data)
+
+    def async_get_action_target_state(
+        self, action: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return expected state when action is complete."""
+
+        def _target_state(
+            target_complete_state: bool,
+        ) -> Callable[[bool], bool]:
+            @rasc_target_state(target_complete_state)
+            def match(value: bool) -> bool:
+                return value == target_complete_state
+
+            return match
+
+        target: dict[str, Any] = {}
+
+        if action[CONF_SERVICE] == SERVICE_START:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_remaining"] = _target_state(True)
+            else:
+                target["is_remaining"] = _target_state(False)
+
+        return target

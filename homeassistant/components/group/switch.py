@@ -131,7 +131,7 @@ class SwitchGroup(GroupEntity, SwitchEntity):
         """Forward the turn_on command to all switches in the group."""
         data = {ATTR_ENTITY_ID: self._entity_ids}
         _LOGGER.debug("Forwarded turn_on command: %s", data)
-
+        self._preprocessing(data)
         await self.hass.services.async_call(
             SWITCH_DOMAIN,
             SERVICE_TURN_ON,
@@ -143,6 +143,7 @@ class SwitchGroup(GroupEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Forward the turn_off command to all switches in the group."""
         data = {ATTR_ENTITY_ID: self._entity_ids}
+        self._preprocessing(data)
         await self.hass.services.async_call(
             SWITCH_DOMAIN,
             SERVICE_TURN_OFF,
