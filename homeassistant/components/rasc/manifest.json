@@ -1,0 +1,8 @@
+{
+  "domain": "rasc",
+  "name": "RASC Abstraction",
+  "codeowners": ["@kwang1012"],
+  "documentation": "https://www.home-assistant.io/integrations/rasc",
+  "iot_class": "local_push",
+  "quality_scale": "bronze"
+}

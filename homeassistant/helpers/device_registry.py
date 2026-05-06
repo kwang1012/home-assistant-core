@@ -946,7 +946,8 @@ class DeviceRegistry(BaseRegistry[dict[str, list[dict[str, Any]]]]):
                 device = DeviceEntry(area_id=area_id)
 
             else:
-                self.deleted_devices.pop(deleted_device.id)
+                if deleted_device.id in self.devices:
+                    self.deleted_devices.pop(deleted_device.id)
                 device = deleted_device.to_device_entry(
                     config_entry,
                     # Interpret not specifying a subentry as None

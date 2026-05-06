@@ -1,0 +1,49 @@
+0.0,653ae47ad5964ee2ad013d45168e4e6b,Switch lights off at sunrise
+0.1,8fc3a937a5804719a4200bb80c1ff619,Switch on xmas tree
+0.0099999999999999,bc1ac4bf0b54451882ca0b7033b7cfab,MorningAction
+0.0099999999999999,1715677183344,Door Opening State to Color Light
+0.01,1715697183344,Door Closing State to Color Light
+0.01,1715667183349,Lock It When I Leave
+0.0099999999999999,1715667183351,Car Departs
+0.01,1715687183344,Door Closed State to Color Light
+0.01,1715667183355,Lock it at a specific time
+0.0099999999999999,1715797722148,Open garage door with S/C children
+0.01,8fc3a937a5804719a4200bb80c1ff621,CR Bed Light Control
+0.01,a2eb5a03211e48b98c4f49f002b6833d,Whole House Fan
+1.38,1715667183344,Door Open State to Color Light
+0.01,1715707183344,Door Jammed State to Color Light
+30.0,1706641906108,Turn on Service
+0.1,712ec364f7bd4290ad579e0bb5e3b52e,Switch lights on at sunset
+0.0099999999999999,8fc3a937a5804719a4200bb80c1ff620,FF Corridor Light Control
+0.0099999999999999,1715667183338,Whole House Fan Control
+0.01,1715667183342,Let There Be Dark
+0.01,1715667183344,Door Open State to Color Light
+0.0099999999999999,1715667183345,Enhanced Auto UnLock Door
+0.01,1715667183346,Brighten Dark Places
+0.01,1715667183353,Car Door Opened
+0.0099999999999999,1715721247625,Close and lock all door
+0.01,8fc3a937a5804719a4200bb80c1ff621,CR Bed Light Control
+0.01,a2eb5a03211e48b98c4f49f002b6833d,Whole House Fan
+1.38,1715667183343,Let There Be Light
+30.0,b438cb83bf414166bf478017f3095e9e,Switch off GF lights when to bed
+0.1,1715667183352,Garage Door Opened
+0.0099999999999999,60b9cb7a9c4e4311a27cd23267a427d7,Switch off indoor lights when asleep
+0.0099999999999999,daa3f20af9ba46d4a41581af68a4255d,Switch off GF lights when nobody home
+0.01,1715667183350,Car Arrives
+0.01,60fc38a590204b2da454ea90c7f8fc56,Switch off FF lights when nobody home
+0.0099999999999999,67e1d02ebb094f1b8fbb8633f5364939,Switch off lights when nobody home after midnight
+0.01,8fc3a937a5804719a4200bb80c1ff624,Lights on at sunset
+0.01,a2eb5a03211e48b98c4f49f002b6833d,Whole House Fan
+0.0099999999999999,8fc3a937a5804719a4200bb80c1ff622,Lights on at night
+0.01,8fc3a937a5804719a4200bb80c1ff623,Lights off at night
+0.01,1715667183354,Interior Door Closed
+1.38,712ec364f7bd4290ad579e0bb5e3b52e,Lights on at sunset
+0.01,8fc3a937a5804719a4200bb80c1ff625,Harmony off lights off
+0.4099999999999999,a2eb5a03211e48b98c4f49f002b6833b,SunsetAction
+0.0099999999999997,1715667183344,Door Open State to Color Light
+0.0100000000000002,a2eb5a03211e48b98c4f49f002b6833c,Good Night House
+0.02,1715667184345,Enhanced Auto Lock Door
+0.0099999999999997,1715667183347,Garage Door Opener
+0.0100000000000002,1715667183348,Let There Be Light!
+0.0099999999999997,1715667183320,Unlock It When I Arrive
+0.0100000000000002,8fc3a937a5804719a4200bb80c1ff621,CR Bed Light Control

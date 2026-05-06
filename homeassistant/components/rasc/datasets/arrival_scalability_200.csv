@@ -1,0 +1,196 @@
+0,653ae47ad5964ee2ad013d45168e4e6b,Switch lights off at sunrise
+0,653ae47ad5964ee2ad013d45168e4e6b1,Switch lights off at sunrise (1)
+0,653ae47ad5964ee2ad013d45168e4e6b2,Switch lights off at sunrise (2)
+0,653ae47ad5964ee2ad013d45168e4e6b3,Switch lights off at sunrise (3)
+0,8fc3a937a5804719a4200bb80c1ff619,Switch on xmas tree
+0,8fc3a937a5804719a4200bb80c1ff6191,Switch on xmas tree (1)
+0,8fc3a937a5804719a4200bb80c1ff6192,Switch on xmas tree (2)
+0,8fc3a937a5804719a4200bb80c1ff6193,Switch on xmas tree (3)
+0,bc1ac4bf0b54451882ca0b7033b7cfab,MorningAction
+0,bc1ac4bf0b54451882ca0b7033b7cfab1,MorningAction (1)
+0,bc1ac4bf0b54451882ca0b7033b7cfab2,MorningAction (2)
+0,bc1ac4bf0b54451882ca0b7033b7cfab3,MorningAction (3)
+0,1715677183344,Door Opening State to Color Light
+0,17156771833441,Door Opening State to Color Light (1)
+0,17156771833442,Door Opening State to Color Light (2)
+0,17156771833443,Door Opening State to Color Light (3)
+0,1715697183344,Door Closing State to Color Light
+0,17156971833441,Door Closing State to Color Light (1)
+0,17156971833442,Door Closing State to Color Light (2)
+0,17156971833443,Door Closing State to Color Light (3)
+0,1715667183349,Lock It When I Leave
+0,17156671833491,Lock It When I Leave (1)
+0,17156671833492,Lock It When I Leave (2)
+0,17156671833493,Lock It When I Leave (3)
+0,1715667183351,Car Departs
+0,17156671833511,Car Departs (1)
+0,17156671833512,Car Departs (2)
+0,17156671833513,Car Departs (3)
+0,1715687183344,Door Closed State to Color Light
+0,17156871833441,Door Closed State to Color Light (1)
+0,17156871833442,Door Closed State to Color Light (2)
+0,17156871833443,Door Closed State to Color Light (3)
+0,1715667183355,Lock it at a specific time
+0,17156671833551,Lock it at a specific time (1)
+0,17156671833552,Lock it at a specific time (2)
+0,17156671833553,Lock it at a specific time (3)
+0,1715797722148,Open garage door with S/C children
+0,17157977221481,Open garage door with S/C children (1)
+0,17157977221482,Open garage door with S/C children (2)
+0,17157977221483,Open garage door with S/C children (3)
+0,8fc3a937a5804719a4200bb80c1ff621,CR Bed Light Control
+0,8fc3a937a5804719a4200bb80c1ff6211,CR Bed Light Control (1)
+0,8fc3a937a5804719a4200bb80c1ff6212,CR Bed Light Control (2)
+0,8fc3a937a5804719a4200bb80c1ff6213,CR Bed Light Control (3)
+0,a2eb5a03211e48b98c4f49f002b6833d,Whole House Fan
+0,a2eb5a03211e48b98c4f49f002b6833d1,Whole House Fan (1)
+0,a2eb5a03211e48b98c4f49f002b6833d2,Whole House Fan (2)
+0,a2eb5a03211e48b98c4f49f002b6833d3,Whole House Fan (3)
+0,1715667183344,Door Open State to Color Light
+0,17156671833441,Door Open State to Color Light (1)
+0,17156671833442,Door Open State to Color Light (2)
+0,17156671833443,Door Open State to Color Light (3)
+0,1715707183344,Door Jammed State to Color Light
+0,17157071833441,Door Jammed State to Color Light (1)
+0,17157071833442,Door Jammed State to Color Light (2)
+0,17157071833443,Door Jammed State to Color Light (3)
+0,1706641906108,Turn on Service
+0,17066419061081,Turn on Service (1)
+0,17066419061082,Turn on Service (2)
+0,17066419061083,Turn on Service (3)
+0,712ec364f7bd4290ad579e0bb5e3b52e,Switch lights on at sunset
+0,712ec364f7bd4290ad579e0bb5e3b52e1,Switch lights on at sunset (1)
+0,712ec364f7bd4290ad579e0bb5e3b52e2,Switch lights on at sunset (2)
+0,712ec364f7bd4290ad579e0bb5e3b52e3,Switch lights on at sunset (3)
+0,8fc3a937a5804719a4200bb80c1ff620,FF Corridor Light Control
+0,8fc3a937a5804719a4200bb80c1ff6201,FF Corridor Light Control (1)
+0,8fc3a937a5804719a4200bb80c1ff6202,FF Corridor Light Control (2)
+0,8fc3a937a5804719a4200bb80c1ff6203,FF Corridor Light Control (3)
+0,1715667183338,Whole House Fan Control
+0,17156671833381,Whole House Fan Control (1)
+0,17156671833382,Whole House Fan Control (2)
+0,17156671833383,Whole House Fan Control (3)
+0,1715667183342,Let There Be Dark
+0,17156671833421,Let There Be Dark (1)
+0,17156671833422,Let There Be Dark (2)
+0,17156671833423,Let There Be Dark (3)
+0,1715667183344,Door Open State to Color Light
+0,17156671833441,Door Open State to Color Light (1)
+0,17156671833442,Door Open State to Color Light (2)
+0,17156671833443,Door Open State to Color Light (3)
+0,1715667183345,Enhanced Auto UnLock Door
+0,17156671833451,Enhanced Auto UnLock Door (1)
+0,17156671833452,Enhanced Auto UnLock Door (2)
+0,17156671833453,Enhanced Auto UnLock Door (3)
+0,1715667183346,Brighten Dark Places
+0,17156671833461,Brighten Dark Places (1)
+0,17156671833462,Brighten Dark Places (2)
+0,17156671833463,Brighten Dark Places (3)
+0,1715667183353,Car Door Opened
+0,17156671833531,Car Door Opened (1)
+0,17156671833532,Car Door Opened (2)
+0,17156671833533,Car Door Opened (3)
+0,1715721247625,Close and lock all door
+0,17157212476251,Close and lock all door (1)
+0,17157212476252,Close and lock all door (2)
+0,17157212476253,Close and lock all door (3)
+0,8fc3a937a5804719a4200bb80c1ff621,CR Bed Light Control
+0,8fc3a937a5804719a4200bb80c1ff6211,CR Bed Light Control (1)
+0,8fc3a937a5804719a4200bb80c1ff6212,CR Bed Light Control (2)
+0,8fc3a937a5804719a4200bb80c1ff6213,CR Bed Light Control (3)
+0,a2eb5a03211e48b98c4f49f002b6833d,Whole House Fan
+0,a2eb5a03211e48b98c4f49f002b6833d1,Whole House Fan (1)
+0,a2eb5a03211e48b98c4f49f002b6833d2,Whole House Fan (2)
+0,a2eb5a03211e48b98c4f49f002b6833d3,Whole House Fan (3)
+0,1715667183343,Let There Be Light
+0,17156671833431,Let There Be Light (1)
+0,17156671833432,Let There Be Light (2)
+0,17156671833433,Let There Be Light (3)
+0,b438cb83bf414166bf478017f3095e9e,Switch off GF lights when to bed
+0,b438cb83bf414166bf478017f3095e9e1,Switch off GF lights when to bed (1)
+0,b438cb83bf414166bf478017f3095e9e2,Switch off GF lights when to bed (2)
+0,b438cb83bf414166bf478017f3095e9e3,Switch off GF lights when to bed (3)
+0,1715667183352,Garage Door Opened
+0,17156671833521,Garage Door Opened (1)
+0,17156671833522,Garage Door Opened (2)
+0,17156671833523,Garage Door Opened (3)
+0,60b9cb7a9c4e4311a27cd23267a427d7,Switch off indoor lights when asleep
+0,60b9cb7a9c4e4311a27cd23267a427d71,Switch off indoor lights when asleep (1)
+0,60b9cb7a9c4e4311a27cd23267a427d72,Switch off indoor lights when asleep (2)
+0,60b9cb7a9c4e4311a27cd23267a427d73,Switch off indoor lights when asleep (3)
+0,daa3f20af9ba46d4a41581af68a4255d,Switch off GF lights when nobody home
+0,daa3f20af9ba46d4a41581af68a4255d1,Switch off GF lights when nobody home (1)
+0,daa3f20af9ba46d4a41581af68a4255d2,Switch off GF lights when nobody home (2)
+0,daa3f20af9ba46d4a41581af68a4255d3,Switch off GF lights when nobody home (3)
+0,1715667183350,Car Arrives
+0,17156671833501,Car Arrives (1)
+0,17156671833502,Car Arrives (2)
+0,17156671833503,Car Arrives (3)
+0,60fc38a590204b2da454ea90c7f8fc56,Switch off FF lights when nobody home
+0,60fc38a590204b2da454ea90c7f8fc561,Switch off FF lights when nobody home (1)
+0,60fc38a590204b2da454ea90c7f8fc562,Switch off FF lights when nobody home (2)
+0,60fc38a590204b2da454ea90c7f8fc563,Switch off FF lights when nobody home (3)
+0,67e1d02ebb094f1b8fbb8633f5364939,Switch off lights when nobody home after midnight
+0,67e1d02ebb094f1b8fbb8633f53649391,Switch off lights when nobody home after midnight (1)
+0,67e1d02ebb094f1b8fbb8633f53649392,Switch off lights when nobody home after midnight (2)
+0,67e1d02ebb094f1b8fbb8633f53649393,Switch off lights when nobody home after midnight (3)
+0,8fc3a937a5804719a4200bb80c1ff624,Lights on at sunset
+0,8fc3a937a5804719a4200bb80c1ff6241,Lights on at sunset (1)
+0,8fc3a937a5804719a4200bb80c1ff6242,Lights on at sunset (2)
+0,8fc3a937a5804719a4200bb80c1ff6243,Lights on at sunset (3)
+0,a2eb5a03211e48b98c4f49f002b6833d,Whole House Fan
+0,a2eb5a03211e48b98c4f49f002b6833d1,Whole House Fan (1)
+0,a2eb5a03211e48b98c4f49f002b6833d2,Whole House Fan (2)
+0,a2eb5a03211e48b98c4f49f002b6833d3,Whole House Fan (3)
+0,8fc3a937a5804719a4200bb80c1ff622,Lights on at night
+0,8fc3a937a5804719a4200bb80c1ff6221,Lights on at night (1)
+0,8fc3a937a5804719a4200bb80c1ff6222,Lights on at night (2)
+0,8fc3a937a5804719a4200bb80c1ff6223,Lights on at night (3)
+0,8fc3a937a5804719a4200bb80c1ff623,Lights off at night
+0,8fc3a937a5804719a4200bb80c1ff6231,Lights off at night (1)
+0,8fc3a937a5804719a4200bb80c1ff6232,Lights off at night (2)
+0,8fc3a937a5804719a4200bb80c1ff6233,Lights off at night (3)
+0,1715667183354,Interior Door Closed
+0,17156671833541,Interior Door Closed (1)
+0,17156671833542,Interior Door Closed (2)
+0,17156671833543,Interior Door Closed (3)
+0,712ec364f7bd4290ad579e0bb5e3b52e,Lights on at sunset
+0,712ec364f7bd4290ad579e0bb5e3b52e1,Lights on at sunset (1)
+0,712ec364f7bd4290ad579e0bb5e3b52e2,Lights on at sunset (2)
+0,712ec364f7bd4290ad579e0bb5e3b52e3,Lights on at sunset (3)
+0,8fc3a937a5804719a4200bb80c1ff625,Harmony off lights off
+0,8fc3a937a5804719a4200bb80c1ff6251,Harmony off lights off (1)
+0,8fc3a937a5804719a4200bb80c1ff6252,Harmony off lights off (2)
+0,8fc3a937a5804719a4200bb80c1ff6253,Harmony off lights off (3)
+0,a2eb5a03211e48b98c4f49f002b6833b,SunsetAction
+0,a2eb5a03211e48b98c4f49f002b6833b1,SunsetAction (1)
+0,a2eb5a03211e48b98c4f49f002b6833b2,SunsetAction (2)
+0,a2eb5a03211e48b98c4f49f002b6833b3,SunsetAction (3)
+0,1715667183344,Door Open State to Color Light
+0,17156671833441,Door Open State to Color Light (1)
+0,17156671833442,Door Open State to Color Light (2)
+0,17156671833443,Door Open State to Color Light (3)
+0,a2eb5a03211e48b98c4f49f002b6833c,Good Night House
+0,a2eb5a03211e48b98c4f49f002b6833c1,Good Night House (1)
+0,a2eb5a03211e48b98c4f49f002b6833c2,Good Night House (2)
+0,a2eb5a03211e48b98c4f49f002b6833c3,Good Night House (3)
+0,1715667184345,Enhanced Auto Lock Door
+0,17156671843451,Enhanced Auto Lock Door (1)
+0,17156671843452,Enhanced Auto Lock Door (2)
+0,17156671843453,Enhanced Auto Lock Door (3)
+0,1715667183347,Garage Door Opener
+0,17156671833471,Garage Door Opener (1)
+0,17156671833472,Garage Door Opener (2)
+0,17156671833473,Garage Door Opener (3)
+0,1715667183348,Let There Be Light!
+0,17156671833481,Let There Be Light! (1)
+0,17156671833482,Let There Be Light! (2)
+0,17156671833483,Let There Be Light! (3)
+0,1715667183320,Unlock It When I Arrive
+0,17156671833201,Unlock It When I Arrive (1)
+0,17156671833202,Unlock It When I Arrive (2)
+0,17156671833203,Unlock It When I Arrive (3)
+0,8fc3a937a5804719a4200bb80c1ff621,CR Bed Light Control
+0,8fc3a937a5804719a4200bb80c1ff6211,CR Bed Light Control (1)
+0,8fc3a937a5804719a4200bb80c1ff6212,CR Bed Light Control (2)
+0,8fc3a937a5804719a4200bb80c1ff6213,CR Bed Light Control (3)

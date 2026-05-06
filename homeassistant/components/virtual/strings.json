@@ -1,0 +1,63 @@
+{
+  "config": {
+    "error": {
+      "file_name_used": "That file name is already in use, try another.",
+      "group_name_used": "That group name is already in use, try another."
+    },
+    "step": {
+      "user": {
+        "data": {
+          "file_name": "File",
+          "group_name": "Group"
+        },
+        "description": "Enter the group name and path to a file containing the virtual devices. If it does not exist an empty one will be created.",
+        "title": "Virtual Database"
+      }
+    }
+  },
+  "services": {
+    "move": {
+      "description": "Move a device tracker to a new location.",
+      "fields": {
+        "location": {
+          "description": "Where to move the device tracker to.",
+          "name": "Location"
+        }
+      },
+      "name": "Move"
+    },
+    "set": {
+      "description": "Set the value of a sensor.",
+      "fields": {
+        "value": {
+          "description": "Value to set state to.",
+          "name": "Value"
+        }
+      },
+      "name": "Set"
+    },
+    "set_available": {
+      "description": "Set availability of an entity.",
+      "fields": {
+        "value": {
+          "description": "Is the entity available..",
+          "name": "Value"
+        }
+      },
+      "name": "Set Availability"
+    },
+    "toggle": {
+      "description": "Toggle a binary sensor.",
+      "name": "Toggle"
+    },
+    "turn_off": {
+      "description": "Turn off a binary sensor.",
+      "name": "Turn Off"
+    },
+    "turn_on": {
+      "description": "Turn on a binary sensor.",
+      "name": "Turn On"
+    }
+  },
+  "title": "Virtual Devices"
+}

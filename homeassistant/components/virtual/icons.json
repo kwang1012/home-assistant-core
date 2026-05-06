@@ -1,0 +1,22 @@
+{
+  "services": {
+    "move": {
+      "service": "mdi:map-marker"
+    },
+    "set": {
+      "service": "mdi:pencil"
+    },
+    "set_available": {
+      "service": "mdi:check-circle"
+    },
+    "toggle": {
+      "service": "mdi:toggle-switch-variant"
+    },
+    "turn_off": {
+      "service": "mdi:toggle-switch-off"
+    },
+    "turn_on": {
+      "service": "mdi:toggle-switch"
+    }
+  }
+}

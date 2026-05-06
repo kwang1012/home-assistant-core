@@ -9,8 +9,13 @@ from typing import Any, final
 from propcache.api import cached_property
 import voluptuous as vol
 
+from homeassistant.components.rasc import rasc_target_state
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    CONF_EVENT,
+    CONF_SERVICE,
+    CONF_SERVICE_DATA,
+    RASC_START,
     SERVICE_CLOSE_COVER,
     SERVICE_CLOSE_COVER_TILT,
     SERVICE_OPEN_COVER,
@@ -21,6 +26,7 @@ from homeassistant.const import (
     SERVICE_STOP_COVER_TILT,
     SERVICE_TOGGLE,
     SERVICE_TOGGLE_COVER_TILT,
+    Platform,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
@@ -202,13 +208,18 @@ class CoverEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
     _attr_current_cover_position: int | None = None
     _attr_current_cover_tilt_position: int | None = None
     _attr_device_class: CoverDeviceClass | None
-    _attr_is_closed: bool | None
+    _attr_is_closed: bool | None = None
     _attr_is_closing: bool | None = None
     _attr_is_opening: bool | None = None
     _attr_state: None = None
     _attr_supported_features: CoverEntityFeature | None
 
     _cover_is_last_toggle_direction_open = True
+
+    @cached_property
+    def platform_value(self) -> str:
+        """Return entity platform value."""
+        return Platform.COVER.value
 
     @cached_property
     def current_cover_position(self) -> int | None:
@@ -434,3 +445,128 @@ class CoverEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
         return (
             fns["close"] if self._cover_is_last_toggle_direction_open else fns["open"]
         )
+
+    def async_get_action_target_state(
+        self, action: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return expected state when action is start/complete."""
+
+        def _target_state(
+            target_complete_state: bool | int,
+        ) -> Callable[[bool | int], bool]:
+            @rasc_target_state(target_complete_state)
+            def match(value: bool | int) -> bool:
+                return value == target_complete_state
+
+            return match
+
+        def _target_position(
+            target_complete_state: int,
+        ) -> Callable[[int], int]:
+            @rasc_target_state(target_complete_state)
+            def match(value: int) -> bool:
+                return value == target_complete_state
+
+            return match
+
+        target: dict[str, Any] = {}
+
+        if action[CONF_SERVICE] == SERVICE_OPEN_COVER:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_closed"] = _target_state(False)
+                target["is_opening"] = _target_state(True)
+                target["is_closing"] = _target_state(False)
+            else:
+                target["current_cover_position"] = _target_state(100)
+                target["is_closed"] = _target_state(False)
+                target["is_opening"] = _target_state(False)
+                target["is_closing"] = _target_state(False)
+        elif action[CONF_SERVICE] == SERVICE_CLOSE_COVER:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_closed"] = _target_state(False)
+                target["is_opening"] = _target_state(False)
+                target["is_closing"] = _target_state(True)
+            else:
+                target["current_cover_position"] = _target_state(0)
+                target["is_closed"] = _target_state(True)
+                target["is_opening"] = _target_state(False)
+                target["is_closing"] = _target_state(False)
+        elif action[CONF_SERVICE] == SERVICE_TOGGLE:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_closed"] = _target_state(False)
+                target["is_opening"] = _target_state(
+                    not self._cover_is_last_toggle_direction_open
+                )
+                target["is_closing"] = _target_state(
+                    self._cover_is_last_toggle_direction_open
+                )
+            else:
+                target["is_closed"] = _target_state(
+                    self._cover_is_last_toggle_direction_open
+                )
+                target["is_opening"] = _target_state(False)
+                target["is_closing"] = _target_state(False)
+        elif action[CONF_SERVICE] == SERVICE_SET_COVER_POSITION:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_closed"] = _target_state(False)
+            else:
+                target["is_closed"] = _target_state(False)
+                target["is_opening"] = _target_state(False)
+                target["is_closing"] = _target_state(False)
+                if (
+                    CONF_SERVICE_DATA in action
+                    and ATTR_POSITION in action[CONF_SERVICE_DATA]
+                ):
+                    position = action[CONF_SERVICE_DATA][ATTR_POSITION]
+                    target["current_cover_position"] = _target_position(position)
+        elif action[CONF_SERVICE] == SERVICE_STOP_COVER:
+            target["is_closed"] = lambda _: True
+
+        elif action[CONF_SERVICE] == SERVICE_OPEN_COVER_TILT:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_closed"] = _target_state(False)
+                target["is_opening"] = _target_state(True)
+                target["is_closing"] = _target_state(False)
+            else:
+                target["current_cover_tilt_position"] = _target_position(100)
+                target["is_opening"] = _target_state(False)
+                target["is_closing"] = _target_state(False)
+        elif action[CONF_SERVICE] == SERVICE_CLOSE_COVER_TILT:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_closed"] = _target_state(False)
+                target["is_opening"] = _target_state(False)
+                target["is_closing"] = _target_state(True)
+            else:
+                target["current_cover_tilt_position"] = _target_position(0)
+                target["is_opening"] = _target_state(False)
+                target["is_closing"] = _target_state(False)
+        elif action[CONF_SERVICE] == SERVICE_TOGGLE_COVER_TILT:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_closed"] = _target_state(False)
+                target["is_opening"] = _target_state(
+                    not self._cover_is_last_toggle_direction_open
+                )
+                target["is_closing"] = _target_state(
+                    self._cover_is_last_toggle_direction_open
+                )
+            else:
+                position = 0 if self._cover_is_last_toggle_direction_open else 100
+                target["current_cover_tilt_position"] = _target_position(position)
+                target["is_opening"] = _target_state(False)
+                target["is_closing"] = _target_state(False)
+        elif action[CONF_SERVICE] == SERVICE_SET_COVER_TILT_POSITION:
+            if action[CONF_EVENT] == RASC_START:
+                target["is_closed"] = _target_state(False)
+            else:
+                target["is_closed"] = _target_state(False)
+                target["is_opening"] = _target_state(False)
+                target["is_closing"] = _target_state(False)
+                if (
+                    CONF_SERVICE_DATA in action
+                    and ATTR_TILT_POSITION in action[CONF_SERVICE_DATA]
+                ):
+                    position = action[CONF_SERVICE_DATA][ATTR_TILT_POSITION]
+                    target["current_cover_tilt_position"] = _target_position(position)
+        elif action[CONF_SERVICE] == SERVICE_STOP_COVER_TILT:
+            target["is_closed"] = lambda _: True
+        return target

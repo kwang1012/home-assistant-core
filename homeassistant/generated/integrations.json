@@ -5720,6 +5720,12 @@
       "config_flow": true,
       "iot_class": "local_push"
     },
+    "rasc": {
+      "name": "RASC Abstraction",
+      "integration_type": "hub",
+      "config_flow": false,
+      "iot_class": "local_push"
+    },
     "raspberry_pi": {
       "name": "Raspberry Pi",
       "integrations": {
@@ -5738,6 +5744,12 @@
           "config_flow": false,
           "iot_class": "local_push",
           "name": "Raspberry Pi Remote GPIO"
+        },
+        "rpi_device": {
+          "integration_type": "hub",
+          "config_flow": false,
+          "iot_class": "local_polling",
+          "name": "Raspberry Pi Device"
         }
       }
     },
@@ -7698,6 +7710,19 @@
       "config_flow": true,
       "iot_class": "local_polling"
     },
+    "virtual": {
+      "name": "Virtual Devices",
+      "integrations": {
+        "virtual": {
+          "integration_type": "hub",
+          "config_flow": true,
+          "iot_class": "local_push"
+        }
+      },
+      "iot_standards": [
+        "matter"
+      ]
+    },
     "vivotek": {
       "name": "VIVOTEK",
       "integration_type": "device",
@@ -8464,6 +8489,7 @@
     "utility_meter",
     "vegehub",
     "version",
+    "virtual",
     "waze_travel_time",
     "workday",
     "zodiac"

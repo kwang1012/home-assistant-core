@@ -1,0 +1,56 @@
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  appropriate-polling:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  brands:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  common-modules:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  config-flow:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  config-flow-test-coverage:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  dependency-transparency:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  docs-actions:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  docs-high-level-description:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  docs-installation-instructions:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  docs-removal-instructions:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  entity-event-setup:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  entity-unique-id:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  has-entity-name:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  runtime-data:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  test-before-configure:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  test-before-setup:
+    status: exempt
+    comment: Research integration, not a standard HA integration.
+  unique-config-entry:
+    status: exempt
+    comment: Research integration, not a standard HA integration.

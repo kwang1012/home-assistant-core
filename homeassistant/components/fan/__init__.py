@@ -1,5 +1,6 @@
 """Provides functionality to interact with fans."""
 
+from collections.abc import Callable
 from datetime import timedelta
 from enum import IntFlag
 import functools as ft
@@ -10,12 +11,18 @@ from typing import Any, final
 from propcache.api import cached_property
 import voluptuous as vol
 
+from homeassistant.components.rasc import rasc_target_state
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    CONF_EVENT,
+    CONF_SERVICE,
+    CONF_SERVICE_DATA,
+    RASC_START,
     SERVICE_TOGGLE,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     STATE_ON,
+    Platform,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
@@ -64,6 +71,7 @@ ATTR_PERCENTAGE = "percentage"
 ATTR_PERCENTAGE_STEP = "percentage_step"
 ATTR_OSCILLATING = "oscillating"
 ATTR_DIRECTION = "direction"
+ATTR_CURRENT_DIRECTION = "current_direction"
 ATTR_PRESET_MODE = "preset_mode"
 ATTR_PRESET_MODES = "preset_modes"
 
@@ -212,6 +220,11 @@ class FanEntity(ToggleEntity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
     _attr_preset_modes: list[str] | None = None
     _attr_speed_count: int = 100
     _attr_supported_features: FanEntityFeature = FanEntityFeature(0)
+
+    @property
+    def platform_value(self) -> str:
+        """Return entity platform value."""
+        return Platform.FAN.value
 
     def set_percentage(self, percentage: int) -> None:
         """Set the speed of the fan, as a percentage."""
@@ -423,3 +436,140 @@ class FanEntity(ToggleEntity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
         Requires FanEntityFeature.SET_SPEED.
         """
         return self._attr_preset_modes
+
+    def async_get_action_target_state(  # noqa: C901
+        self, action: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return expected state when action is start/complete."""
+
+        def _target_start_state(
+            current: float | str | None, target_complete_state: float | str
+        ) -> Callable[[int | float | str], bool]:
+            @rasc_target_state(target_complete_state)
+            def match(value: float | str) -> bool:
+                if (
+                    isinstance(value, str)
+                    and isinstance(current, str)
+                    and isinstance(target_complete_state, str)
+                ):
+                    return value == current
+                if (
+                    isinstance(value, str)
+                    or isinstance(current, str)
+                    or isinstance(target_complete_state, str)
+                ):
+                    return False
+                if current is None:
+                    if target_complete_state > 0:
+                        return value == 0
+                    return value == 100
+                if target_complete_state > current:
+                    return value > current
+                if target_complete_state < current:
+                    return value < current
+                return False
+
+            return match
+
+        def _target_direct_start_state(current: str | None) -> Callable[[str], bool]:
+            def match(value: str) -> bool:
+                return value != current
+
+            return match
+
+        def _target_complete_state(
+            target_complete_state: int | str,
+        ) -> Callable[[int | str], bool]:
+            @rasc_target_state(target_complete_state)
+            def match(value: int | str) -> bool:
+                return value == target_complete_state
+
+            return match
+
+        target: dict[str, Any] = super().async_get_action_target_state(action) or {}
+
+        service_data = action[CONF_SERVICE_DATA]
+        if action[CONF_SERVICE] == SERVICE_TURN_ON:
+            if action[CONF_EVENT] == RASC_START:
+                if ATTR_PERCENTAGE in service_data:
+                    target[ATTR_PERCENTAGE] = _target_start_state(
+                        self.percentage, service_data[ATTR_PERCENTAGE]
+                    )
+                if ATTR_PRESET_MODE in service_data:
+                    target[ATTR_PRESET_MODE] = _target_start_state(
+                        self.preset_mode, service_data[ATTR_PRESET_MODE]
+                    )
+            else:
+                if ATTR_PERCENTAGE in service_data:
+                    target[ATTR_PERCENTAGE] = _target_complete_state(
+                        service_data[ATTR_PERCENTAGE]
+                    )
+                if ATTR_PRESET_MODE in service_data:
+                    target[ATTR_PRESET_MODE] = _target_complete_state(
+                        service_data[ATTR_PRESET_MODE]
+                    )
+        elif action[CONF_SERVICE] == SERVICE_TURN_OFF:
+            if action[CONF_EVENT] == RASC_START:
+                if ATTR_PERCENTAGE in service_data:
+                    target[ATTR_PERCENTAGE] = _target_start_state(self.percentage, 0)
+            elif ATTR_PERCENTAGE in service_data:
+                target[ATTR_PERCENTAGE] = _target_complete_state(0)
+
+        if action[CONF_SERVICE] == SERVICE_SET_PERCENTAGE:
+            if action[CONF_EVENT] == RASC_START:
+                target[ATTR_PERCENTAGE] = _target_start_state(
+                    self.percentage, service_data[ATTR_PERCENTAGE]
+                )
+            else:
+                target[ATTR_PERCENTAGE] = _target_complete_state(
+                    service_data[ATTR_PERCENTAGE]
+                )
+        elif action[CONF_SERVICE] == SERVICE_INCREASE_SPEED:
+            if action[CONF_EVENT] == RASC_START:
+                target[ATTR_PERCENTAGE] = _target_start_state(
+                    self.percentage,
+                    min(100, self.percentage + service_data[ATTR_PERCENTAGE_STEP]),
+                )
+            else:
+                target[ATTR_PERCENTAGE] = _target_complete_state(
+                    min(100, self.percentage + service_data[ATTR_PERCENTAGE_STEP])
+                )
+        elif action[CONF_SERVICE] == SERVICE_DECREASE_SPEED:
+            if action[CONF_EVENT] == RASC_START:
+                target[ATTR_PERCENTAGE] = _target_start_state(
+                    self.percentage,
+                    max(0, self.percentage - service_data[ATTR_PERCENTAGE_STEP]),
+                )
+            else:
+                target[ATTR_PERCENTAGE] = _target_complete_state(
+                    max(0, self.percentage - service_data[ATTR_PERCENTAGE_STEP])
+                )
+        elif action[CONF_SERVICE] == SERVICE_SET_DIRECTION:
+            if action[CONF_EVENT] == RASC_START:
+                target[ATTR_CURRENT_DIRECTION] = _target_direct_start_state(
+                    self.current_direction
+                )
+            else:
+                target[ATTR_CURRENT_DIRECTION] = _target_complete_state(
+                    service_data[ATTR_DIRECTION]
+                )
+        elif action[CONF_SERVICE] == SERVICE_OSCILLATE:
+            if action[CONF_EVENT] == RASC_START:
+                target[ATTR_OSCILLATING] = _target_start_state(
+                    self.oscillating, service_data[ATTR_OSCILLATING]
+                )
+            else:
+                target[ATTR_OSCILLATING] = _target_complete_state(
+                    service_data[ATTR_OSCILLATING]
+                )
+        elif action[CONF_SERVICE] == SERVICE_SET_PRESET_MODE:
+            if action[CONF_EVENT] == RASC_START:
+                target[ATTR_PRESET_MODE] = _target_start_state(
+                    self.preset_mode, service_data[ATTR_PRESET_MODE]
+                )
+            else:
+                target[ATTR_PRESET_MODE] = _target_complete_state(
+                    service_data[ATTR_PRESET_MODE]
+                )
+
+        return target

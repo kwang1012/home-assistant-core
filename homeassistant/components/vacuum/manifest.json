@@ -1,6 +1,7 @@
 {
   "domain": "vacuum",
   "name": "Vacuum",
+  "after_dependencies": ["rasc"],
   "codeowners": ["@home-assistant/core"],
   "documentation": "https://www.home-assistant.io/integrations/vacuum",
   "integration_type": "entity",

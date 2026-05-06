@@ -13,6 +13,7 @@ from homeassistant.const import (
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     STATE_ON,
+    Platform,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
@@ -96,6 +97,11 @@ class SwitchEntity(ToggleEntity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_)
 
     entity_description: SwitchEntityDescription
     _attr_device_class: SwitchDeviceClass | None
+
+    @cached_property
+    def platform_value(self) -> str:
+        """Return entity platform value."""
+        return Platform.SWITCH.value
 
     @cached_property
     def device_class(self) -> SwitchDeviceClass | None:

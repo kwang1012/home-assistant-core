@@ -46,6 +46,7 @@ ifaddr==0.2.0
 Jinja2==3.1.6
 lru-dict==1.4.1
 mutagen==1.47.0
+numdifftools>=0.9.42
 openai==2.21.0
 orjson==3.11.8
 packaging>=23.1

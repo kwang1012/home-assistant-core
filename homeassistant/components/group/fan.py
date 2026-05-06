@@ -217,6 +217,7 @@ class FanGroup(GroupEntity, FanEntity):
         self, service: str, support_flag: int, data: dict[str, Any]
     ) -> None:
         """Call a service with all entities."""
+        self._preprocessing(data)
         await self.hass.services.async_call(
             FAN_DOMAIN,
             service,
@@ -227,10 +228,12 @@ class FanGroup(GroupEntity, FanEntity):
 
     async def _async_call_all_entities(self, service: str) -> None:
         """Call a service with all entities."""
+        data = {ATTR_ENTITY_ID: self._entity_ids}
+        self._preprocessing(data)
         await self.hass.services.async_call(
             FAN_DOMAIN,
             service,
-            {ATTR_ENTITY_ID: self._entity_ids},
+            data,
             blocking=True,
             context=self._context,
         )
