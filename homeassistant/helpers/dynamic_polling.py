@@ -137,8 +137,15 @@ def get_best_distribution(data: list[float]) -> st.rv_continuous:
         param = dist.fit(data)
 
         params[dist_name] = param
-        # Applying the Kolmogorov-Smirnov test
-        _, p = st.kstest(data, dist_name, args=param)
+        # Applying the Kolmogorov-Smirnov test. Pass the frozen distribution's
+        # cdf directly rather than `dist_name` + `args=param`: scipy's kstest
+        # fast-paths some well-known distribution names (e.g. "norm") to raw
+        # C functions like scipy.special.ndtr, which don't accept loc/scale
+        # as extra positional args and raise
+        # `TypeError: ndtr() takes from 1 to 2 positional arguments but 3
+        # were given` on newer scipy. The frozen .cdf callable is
+        # equivalent and bypasses that fast path.
+        _, p = st.kstest(data, dist(*param).cdf)
         dist_results.append((dist_name, p))
 
     # select the best fitted distribution

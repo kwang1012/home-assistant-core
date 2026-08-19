@@ -1,0 +1,75 @@
+# syntax=docker/dockerfile:1
+#
+# Purpose-built image for the HA Fault-Injection framework. Boots this
+# submodule's own `hass` (with the custom rasc/rpi_device/virtual
+# components) inside Linux, avoiding the macOS-only PyObjC/CoreBluetooth
+# crash that native (.venv/bin/hass) runs hit on this project's dev
+# machines. Not related to the two upstream Dockerfiles in this directory
+# (Dockerfile is the official multi-stage release build; Dockerfile.dev is
+# the HA-core-development devcontainer) — this one installs requirements_all.txt,
+# same as those, so standard configuration.yaml (default_config: and friends)
+# works as documented rather than needing a trimmed-down config.
+#
+# Build (from homeassistant_core/):
+#   docker build -f Dockerfile.fault-injection -t ha-fault-injection-homeassistant .
+# Run: see main.py, which drives this image directly.
+
+FROM python:3.14-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    autoconf \
+    git \
+    libyaml-dev \
+    libffi-dev \
+    libssl-dev \
+    libavformat-dev \
+    libavcodec-dev \
+    libavdevice-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
+    libavfilter-dev \
+    libpcap-dev \
+    libturbojpeg0 \
+    libxml2 \
+    ffmpeg \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /usr/src/homeassistant
+
+# Install runtime dependencies first, cached separately from source changes.
+# requirements_all.txt (not the lean requirements.txt) so default_config:'s
+# bundled integrations — frontend, camera/stream, usb/dhcp/ssdp discovery,
+# etc. — actually have what they need, same as the official Dockerfile.
+COPY requirements.txt requirements_all.txt ./
+COPY homeassistant/package_constraints.txt homeassistant/package_constraints.txt
+RUN uv pip install --system -r requirements_all.txt
+
+# Cheap layers go after the expensive install above so unrelated changes
+# (e.g. this line itself) don't invalidate that ~3400-package cache.
+COPY --from=ghcr.io/alexxit/go2rtc:latest /usr/local/bin/go2rtc /bin/go2rtc
+
+COPY . .
+# shortuuid: used by helpers/rascalscheduler.py (this project's RASC
+# customization) but not declared in requirements.txt (upstream core deps).
+RUN uv pip install --system -e . colorlog shortuuid \
+    && python3 -m script.translations develop --all
+
+# Deliberately NOT `WORKDIR /config`: configuration.yaml's rpi_device
+# nodes_file (and other relative paths) are resolved against hass's cwd,
+# which must stay the submodule root — matching the native
+# `.venv/bin/hass -c config` invocation this image replaces. `-c /config`
+# below points at the actual (bind-mounted) config dir independently of cwd.
+#
+# Deliberately NOT setting RASC_IS_EXAMPLE=1: that flag makes RASC call
+# hass.stop() right after routine_setup finishes (rasc/__init__.py:389) —
+# a one-shot "run the benchmark once and exit" mode. Our scenarios need HA
+# to stay up for their full duration (manipulating faults, observing
+# delayed effects), so this must stay unset here.
+
+ENTRYPOINT ["hass", "-c", "/config"]

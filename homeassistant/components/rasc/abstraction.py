@@ -113,7 +113,36 @@ class RASCAbstraction:
         platforms = component.async_get_platforms(entity_ids)
         for platform, entities in platforms:
             for entity in entities:
-                self._states[entity.entity_id][context.uniq_id].start_tracking(platform)
+                # An entity can resolve here (post service-dispatch) that
+                # _init_states didn't see moments earlier — most commonly
+                # right at HA startup, before its platform has finished
+                # registering it (see _tracked_entity_ids). Nothing to
+                # attach tracking to in that case; the real service call
+                # already went through via _prepare_ack regardless.
+                if (
+                    entity.entity_id in self._states
+                    and context.uniq_id in self._states[entity.entity_id]
+                ):
+                    self._states[entity.entity_id][context.uniq_id].start_tracking(
+                        platform
+                    )
+
+    def _tracked_entity_ids(self, context: Context, entity_ids: list[str]) -> list[str]:
+        """Return the subset of entity_ids _init_states actually initialized.
+
+        An entity_id can be missing here if it wasn't yet registered with
+        its platform when execute_service's _init_states ran — most
+        commonly right at HA startup, before an integration (e.g.
+        rpi_device) has finished connecting to and registering its
+        entities. RASC simply has nothing to track for that entity for
+        this call; the real service call still went through via
+        _prepare_ack independently of RASC's own tracking.
+        """
+        return [
+            entity_id
+            for entity_id in entity_ids
+            if entity_id in self._states and context.uniq_id in self._states[entity_id]
+        ]
 
     def _get_action_length_estimate(self, state: RASCState) -> float:
         if not state.start_time:
@@ -263,9 +292,10 @@ class RASCAbstraction:
         self, context: Context, service_call: ServiceCall
     ) -> ServiceResponse:
         entity_ids = self._get_entity_ids(service_call)
+        tracked_ids = self._tracked_entity_ids(context, entity_ids)
 
         def check_started() -> bool:
-            for entity_id in entity_ids:
+            for entity_id in tracked_ids:
                 if (
                     not self._states[entity_id][context.uniq_id].started
                     and not self._states[entity_id][context.uniq_id].failed
@@ -278,7 +308,7 @@ class RASCAbstraction:
             context.cv.notify_all()
             if any(
                 not self._states[entity_id][context.uniq_id].started
-                for entity_id in entity_ids
+                for entity_id in tracked_ids
             ):
                 # raise ServiceFailureError("Service failed before started")
                 return False  # type: ignore[return-value]
@@ -288,9 +318,10 @@ class RASCAbstraction:
         self, context: Context, service_call: ServiceCall
     ) -> ServiceResponse:
         entity_ids = self._get_entity_ids(service_call)
+        tracked_ids = self._tracked_entity_ids(context, entity_ids)
 
         def check_completed() -> bool:
-            for entity_id in entity_ids:
+            for entity_id in tracked_ids:
                 if (
                     not self._states[entity_id][context.uniq_id].completed
                     and not self._states[entity_id][context.uniq_id].failed
@@ -303,7 +334,7 @@ class RASCAbstraction:
             context.cv.notify_all()
             if any(
                 not self._states[entity_id][context.uniq_id].completed
-                for entity_id in entity_ids
+                for entity_id in tracked_ids
             ):
                 raise ServiceFailureError("Service failed before completed")
             return entity_ids
@@ -312,20 +343,21 @@ class RASCAbstraction:
         self, context: Context, service_call: ServiceCall
     ) -> None:
         entity_ids = self._get_entity_ids(service_call)
+        tracked_ids = self._tracked_entity_ids(context, entity_ids)
 
         async with context.cv:
             await context.cv.wait_for(
                 lambda: all(
                     self._states[entity_id][context.uniq_id].failed
                     or self._states[entity_id][context.uniq_id].completed
-                    for entity_id in entity_ids
+                    for entity_id in tracked_ids
                 )
             )
             context.cv.notify_all()
 
             successful_actions = []
             failed_actions = []
-            for entity_id in entity_ids:
+            for entity_id in tracked_ids:
                 if self._states[entity_id][context.uniq_id].failed:
                     failed_actions.append(entity_id)
                 else:

@@ -4,8 +4,19 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import logging
 
-from pymicro_vad import MicroVad
-from pyspeex_noise import AudioProcessor
+try:
+    # On some platforms/Python versions the prebuilt micro_vad_cpp /
+    # speex_noise_cpp wheels have an incompatible C++ ABI and fail to
+    # import. Degrade gracefully rather than taking assist_pipeline (and
+    # its dependents: cloud, mobile_app, assist_satellite) down with it —
+    # VAD/noise suppression just become unavailable.
+    from pymicro_vad import MicroVad
+except ImportError:  # pragma: no cover - optional native dependency
+    MicroVad = None
+try:
+    from pyspeex_noise import AudioProcessor
+except ImportError:  # pragma: no cover - optional native dependency
+    AudioProcessor = None
 
 from .const import BYTES_PER_CHUNK
 
@@ -60,6 +71,11 @@ class MicroVadSpeexEnhancer(AudioEnhancer):
         self.auto_gain = auto_gain * 300
 
         if (self.auto_gain != 0) or (self.noise_suppression != 0):
+            if AudioProcessor is None:
+                raise RuntimeError(
+                    "pyspeex_noise is not available in this environment; "
+                    "noise suppression / auto gain cannot be enabled"
+                )
             self.audio_processor = AudioProcessor(
                 self.auto_gain, self.noise_suppression
             )
@@ -72,6 +88,11 @@ class MicroVadSpeexEnhancer(AudioEnhancer):
         self.vad: MicroVad | None = None
 
         if self.is_vad_enabled:
+            if MicroVad is None:
+                raise RuntimeError(
+                    "pymicro_vad is not available in this environment; "
+                    "voice activity detection cannot be enabled"
+                )
             self.vad = MicroVad()
             _LOGGER.debug("Initialized microVAD")
 
